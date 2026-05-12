@@ -56,14 +56,34 @@ app.get("/login", (req, res) => {
   res.sendFile(join(__dirname, "views", "login.html"));
 });
 
+// Lê todos os usuários configurados em env vars:
+// LOGIN_USER + LOGIN_PASSWORD_HASH (primeiro)
+// LOGIN_USER_2 + LOGIN_PASSWORD_HASH_2 (segundo)
+// LOGIN_USER_3 + LOGIN_PASSWORD_HASH_3 (terceiro)
+// ... até LOGIN_USER_10
+function getConfiguredUsers() {
+  const users = [];
+  const first = process.env.LOGIN_USER;
+  const firstHash = process.env.LOGIN_PASSWORD_HASH;
+  if (first && firstHash) users.push({ user: first, hash: firstHash });
+  for (let i = 2; i <= 10; i++) {
+    const u = process.env[`LOGIN_USER_${i}`];
+    const h = process.env[`LOGIN_PASSWORD_HASH_${i}`];
+    if (u && h) users.push({ user: u, hash: h });
+  }
+  return users;
+}
+
 app.post("/login", async (req, res) => {
   const { user, password } = req.body || {};
-  const expectedUser = process.env.LOGIN_USER;
-  const expectedHash = process.env.LOGIN_PASSWORD_HASH;
-  if (!expectedUser || !expectedHash) {
-    return res.status(500).send("LOGIN_USER/LOGIN_PASSWORD_HASH não configurado no .env");
+  const users = getConfiguredUsers();
+  if (!users.length) {
+    return res.status(500).send("Nenhum usuário configurado (LOGIN_USER + LOGIN_PASSWORD_HASH)");
   }
-  if (user !== expectedUser || !bcrypt.compareSync(password || "", expectedHash)) {
+  const match = users.find(
+    (u) => u.user === user && bcrypt.compareSync(password || "", u.hash)
+  );
+  if (!match) {
     return res.status(401).sendFile(join(__dirname, "views", "login-fail.html"));
   }
   req.session.user = user;
@@ -268,5 +288,12 @@ app.get("/healthz", (req, res) => res.json({ ok: true, ts: new Date().toISOStrin
 app.listen(PORT, () => {
   console.log(`\n  🚀 Disparador Node rodando em http://localhost:${PORT}`);
   console.log(`  📁 SQLite em ./data/app.db`);
-  console.log(`  👤 Login: ${process.env.LOGIN_USER || "(não configurado!)"}\n`);
+  const users = getConfiguredUsers();
+  if (!users.length) {
+    console.log(`  ⚠️  Nenhum usuário configurado!\n`);
+  } else {
+    console.log(`  👤 Usuários autorizados (${users.length}):`);
+    for (const u of users) console.log(`     - ${u.user}`);
+    console.log("");
+  }
 });
