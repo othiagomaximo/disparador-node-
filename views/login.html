@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login · Disparador</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="auth">
+  <main class="login-card">
+    <h1>📡 Disparador</h1>
+    <p class="muted">Faça login pra continuar</p>
+    <form method="POST" action="/login">
+      <label>
+        Usuário
+        <input type="text" name="user" autocomplete="username" required autofocus />
+      </label>
+      <label>
+        Senha
+        <input type="password" name="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit">Entrar</button>
+    </form>
+  </main>
+</body>
+</html>

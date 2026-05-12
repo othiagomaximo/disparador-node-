@@ -1,0 +1,25 @@
+{
+  "name": "disparador-node",
+  "version": "1.0.0",
+  "description": "Disparador WhatsApp Cloud API - Node.js Edition",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "hash-pwd": "node scripts/hash-password.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-session": "^1.18.0",
+    "memorystore": "^1.6.7",
+    "multer": "^1.4.5-lts.1",
+    "p-limit": "^6.1.0"
+  }
+}

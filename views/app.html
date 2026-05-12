@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Disparador · WhatsApp Cloud API</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>📡 Disparador</h1>
+    <nav>
+      <button data-tab="config" class="active">1. Config</button>
+      <button data-tab="csv">2. CSV + Mapear</button>
+      <button data-tab="disparo">3. Disparo</button>
+      <button data-tab="relatorio">4. Relatório</button>
+      <form action="/logout" method="POST" style="margin-left:auto">
+        <button type="submit" class="ghost">Sair</button>
+      </form>
+    </nav>
+  </header>
+
+  <main>
+    <!-- TAB 1 - CONFIG -->
+    <section data-pane="config" class="pane active">
+      <h2>Credenciais e Template</h2>
+      <p class="muted">Token do System User com permissão whatsapp_business_messaging. Pega no Meta Business Manager.</p>
+      <label>
+        Access Token *
+        <textarea id="cfg-access_token" rows="3" placeholder="EAA..."></textarea>
+      </label>
+      <div class="row">
+        <label>
+          Phone Number ID *
+          <input id="cfg-phone_number_id" placeholder="15 dígitos" />
+        </label>
+        <label>
+          Nome do Template *
+          <input id="cfg-template_name" placeholder="ex: registrodeclientes" />
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Idioma
+          <input id="cfg-language" value="pt_BR" />
+        </label>
+        <label>
+          Threads paralelas
+          <input id="cfg-concurrency" type="number" min="1" max="50" value="10" />
+        </label>
+      </div>
+      <button id="save-config">💾 Salvar configuração</button>
+      <p class="hint" id="save-config-msg"></p>
+    </section>
+
+    <!-- TAB 2 - CSV -->
+    <section data-pane="csv" class="pane">
+      <h2>Importar CSV e mapear variáveis</h2>
+      <p class="muted">CSV com cabeçalho. Detecta `;` ou `,` automaticamente. Coluna de telefone é obrigatória — números BR são normalizados pra 55+DDD.</p>
+      <form id="csv-form">
+        <input type="file" name="file" accept=".csv,text/csv" required />
+        <button type="submit">📤 Subir CSV</button>
+      </form>
+      <div id="csv-info" class="hidden">
+        <p class="hint" id="csv-summary"></p>
+        <div class="row">
+          <label>
+            Coluna do telefone *
+            <select id="phone-col"></select>
+          </label>
+        </div>
+        <h3>Variáveis do template</h3>
+        <p class="muted">Cada linha vira <code>{{1}}</code>, <code>{{2}}</code>, ... na ordem.</p>
+        <div id="var-cols"></div>
+        <button id="add-var" class="ghost">+ Adicionar variável</button>
+        <h3>Preview</h3>
+        <div class="table-wrap"><table id="preview-table"></table></div>
+      </div>
+    </section>
+
+    <!-- TAB 3 - DISPARO -->
+    <section data-pane="disparo" class="pane">
+      <h2>Disparo em massa</h2>
+      <div class="cards">
+        <div class="card"><h4>Total</h4><b id="stat-total">—</b></div>
+        <div class="card success"><h4>Enviados</h4><b id="stat-enviados">0</b></div>
+        <div class="card error"><h4>Falhas</h4><b id="stat-falhas">0</b></div>
+        <div class="card warn"><h4>Pulados</h4><b id="stat-pulados">0</b></div>
+      </div>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <div class="row">
+        <button id="btn-start" class="primary">▶️ Iniciar disparo</button>
+        <button id="btn-stop" class="danger">⏹ Parar</button>
+      </div>
+      <pre id="log" class="log"></pre>
+    </section>
+
+    <!-- TAB 4 - RELATÓRIO -->
+    <section data-pane="relatorio" class="pane">
+      <h2>Relatórios</h2>
+      <p class="muted">Histórico de disparos. Clica num pra ver detalhes e baixar CSV.</p>
+      <div id="runs-list"></div>
+      <div id="run-detail" class="hidden">
+        <h3 id="run-title"></h3>
+        <button id="btn-download-csv">⬇️ Baixar CSV</button>
+        <div class="table-wrap"><table id="results-table"></table></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
