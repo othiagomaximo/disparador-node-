@@ -14,9 +14,12 @@
       <button data-tab="csv">2. CSV + Mapear</button>
       <button data-tab="disparo">3. Disparo</button>
       <button data-tab="relatorio">4. Relatório</button>
-      <form action="/logout" method="POST" style="margin-left:auto">
-        <button type="submit" class="ghost">Sair</button>
-      </form>
+      <div style="margin-left:auto; display:flex; gap:8px;">
+        <button id="btn-clear-creds" class="ghost" title="Apaga token, phone ID e template salvos">🗑 Limpar credenciais</button>
+        <form action="/logout" method="POST" style="margin:0">
+          <button type="submit" class="ghost">Sair</button>
+        </form>
+      </div>
     </nav>
   </header>
 

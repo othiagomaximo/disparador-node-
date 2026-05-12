@@ -261,6 +261,21 @@ function escapeAttr(s) {
   return String(s).replace(/"/g, "&quot;");
 }
 
+// ===== Limpar credenciais =====
+document.getElementById("btn-clear-creds").addEventListener("click", async () => {
+  if (!confirm("Apagar token, phone ID e template salvos? Você terá que digitar tudo de novo na próxima vez.")) return;
+  const r = await fetch("/api/config/clear", { method: "POST" });
+  if (r.ok) {
+    for (const k of ["access_token", "phone_number_id", "template_name", "language", "concurrency"]) {
+      const el = document.getElementById(`cfg-${k}`);
+      if (el) el.value = "";
+    }
+    alert("✅ Credenciais apagadas!");
+  } else {
+    alert("❌ Erro ao apagar");
+  }
+});
+
 // ===== Init =====
 loadConfig();
 loadCurrentCSV();

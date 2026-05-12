@@ -56,20 +56,26 @@ app.get("/login", (req, res) => {
   res.sendFile(join(__dirname, "views", "login.html"));
 });
 
-// Lê todos os usuários configurados em env vars:
-// LOGIN_USER + LOGIN_PASSWORD_HASH (primeiro)
-// LOGIN_USER_2 + LOGIN_PASSWORD_HASH_2 (segundo)
-// LOGIN_USER_3 + LOGIN_PASSWORD_HASH_3 (terceiro)
-// ... até LOGIN_USER_10
+// Lê todos os usuários configurados em env vars.
+// Aceita SENHA EM TEXTO PURO via LOGIN_PASSWORD (mais simples, evita problema com $)
+// OU hash bcrypt via LOGIN_PASSWORD_HASH (mais seguro).
+// Múltiplos usuários: LOGIN_USER_2 / LOGIN_PASSWORD_2, etc até _10
 function getConfiguredUsers() {
   const users = [];
-  const first = process.env.LOGIN_USER;
-  const firstHash = process.env.LOGIN_PASSWORD_HASH;
-  if (first && firstHash) users.push({ user: first, hash: firstHash });
+  function pushIf(userKey, passKey, hashKey) {
+    const user = process.env[userKey];
+    const plain = process.env[passKey];
+    const hash = process.env[hashKey];
+    if (!user) return;
+    if (plain) {
+      users.push({ user, secret: plain, isHash: false });
+    } else if (hash) {
+      users.push({ user, secret: hash, isHash: true });
+    }
+  }
+  pushIf("LOGIN_USER", "LOGIN_PASSWORD", "LOGIN_PASSWORD_HASH");
   for (let i = 2; i <= 10; i++) {
-    const u = process.env[`LOGIN_USER_${i}`];
-    const h = process.env[`LOGIN_PASSWORD_HASH_${i}`];
-    if (u && h) users.push({ user: u, hash: h });
+    pushIf(`LOGIN_USER_${i}`, `LOGIN_PASSWORD_${i}`, `LOGIN_PASSWORD_HASH_${i}`);
   }
   return users;
 }
@@ -78,11 +84,13 @@ app.post("/login", async (req, res) => {
   const { user, password } = req.body || {};
   const users = getConfiguredUsers();
   if (!users.length) {
-    return res.status(500).send("Nenhum usuário configurado (LOGIN_USER + LOGIN_PASSWORD_HASH)");
+    return res.status(500).send("Nenhum usuário configurado");
   }
-  const match = users.find(
-    (u) => u.user === user && bcrypt.compareSync(password || "", u.hash)
-  );
+  const match = users.find((u) => {
+    if (u.user !== user) return false;
+    if (u.isHash) return bcrypt.compareSync(password || "", u.secret);
+    return password === u.secret;
+  });
   if (!match) {
     return res.status(401).sendFile(join(__dirname, "views", "login-fail.html"));
   }
@@ -118,6 +126,13 @@ app.post("/api/config", (req, res) => {
     if (k in req.body) setConfig(k, String(req.body[k] ?? ""));
   }
   res.json({ ok: true, config: getAllConfig() });
+});
+
+// Limpa todas as credenciais salvas (token, phone, template)
+app.post("/api/config/clear", (req, res) => {
+  const keys = ["access_token", "phone_number_id", "template_name", "language", "concurrency"];
+  for (const k of keys) setConfig(k, "");
+  res.json({ ok: true });
 });
 
 // ---------- API: CSV upload + parse ----------
