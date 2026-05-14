@@ -139,3 +139,14 @@ th { color: var(--muted); background: var(--panel); }
 #var-cols .var-row b { width: 40px; color: var(--accent); }
 #var-cols .var-row select { flex: 1; }
 #var-cols .var-row .remove { background: transparent; color: var(--error); border: 1px solid var(--border); padding: 4px 10px; }
+
+/* Badges de delivery_status (vindo do webhook da Meta) */
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.badge-accepted { background: rgba(139,148,158,.18); color: var(--muted); }
+.badge-sent { background: rgba(56,139,253,.18); color: #58a6ff; }
+.badge-delivered { background: rgba(37,211,102,.18); color: var(--accent); }
+.badge-read { background: rgba(30,163,86,.25); color: #2bd47a; }
+.badge-failed { background: rgba(248,81,73,.18); color: var(--error); }

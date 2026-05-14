@@ -91,6 +91,10 @@
         <div class="card warn"><h4>Pulados</h4><b id="stat-pulados">0</b></div>
       </div>
       <div class="progress"><div id="progress-bar"></div></div>
+      <label style="display:flex; align-items:center; gap:8px; margin:12px 0; font-weight:normal;">
+        <input type="checkbox" id="chk-skip-duplicates" checked />
+        <span>Pular números já enviados em disparos anteriores <span class="muted">(recomendado)</span></span>
+      </label>
       <div class="row">
         <button id="btn-start" class="primary">▶️ Iniciar disparo</button>
         <button id="btn-stop" class="danger">⏹ Parar</button>
@@ -105,7 +109,19 @@
       <div id="runs-list"></div>
       <div id="run-detail" class="hidden">
         <h3 id="run-title"></h3>
-        <button id="btn-download-csv">⬇️ Baixar CSV</button>
+        <div class="row" style="align-items:center; gap:12px; margin-bottom:8px;">
+          <button id="btn-download-csv">⬇️ Baixar CSV</button>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
+            <span class="muted">Filtrar:</span>
+            <select id="delivery-filter">
+              <option value="all">Todos</option>
+              <option value="delivered">Entregues (delivered)</option>
+              <option value="read">Lidos (read)</option>
+              <option value="not_delivered">Não entregues (failed/sem confirmação)</option>
+              <option value="failed">Apenas falhas (failed)</option>
+            </select>
+          </label>
+        </div>
         <div class="table-wrap"><table id="results-table"></table></div>
       </div>
     </section>

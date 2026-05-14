@@ -138,13 +138,17 @@ let evtSource = null;
 document.getElementById("btn-start").addEventListener("click", async () => {
   const phoneCol = document.getElementById("phone-col").value;
   const varCols = Array.from(document.querySelectorAll("#var-cols .var-row select")).map((s) => s.value);
+  const skipDuplicates = document.getElementById("chk-skip-duplicates").checked;
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
-  if (!confirm("Iniciar disparo agora?")) return;
+  const msg = skipDuplicates
+    ? "Iniciar disparo agora?\n\nDuplicados serão pulados."
+    : "Iniciar disparo agora?\n\n⚠️ ATENÇÃO: a opção de pular duplicados está DESMARCADA.\nNúmeros que já receberam vão receber DE NOVO.";
+  if (!confirm(msg)) return;
 
   const r = await fetch("/api/disparo/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phoneCol, varCols }),
+    body: JSON.stringify({ phoneCol, varCols, skipDuplicates }),
   });
   const j = await r.json();
   if (!r.ok) {
@@ -152,7 +156,8 @@ document.getElementById("btn-start").addEventListener("click", async () => {
     return;
   }
   document.getElementById("stat-total").textContent = j.total;
-  appendLog(`Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados)`);
+  const dedupeLabel = j.skipDuplicates ? "dedupe ON" : "dedupe OFF";
+  appendLog(`Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados) · ${dedupeLabel}`);
   attachSSE();
 });
 
@@ -227,23 +232,75 @@ async function loadRuns() {
   });
 }
 
+let currentRunResults = [];
+
 async function loadRunDetail(id) {
   const r = await fetch(`/api/runs/${id}`);
   const { run, results } = await r.json();
+  currentRunResults = results;
   document.getElementById("run-detail").classList.remove("hidden");
   document.getElementById("run-title").textContent = `Run #${run.id} — ${run.status} — ${run.enviados} enviados, ${run.falhas} falhas`;
   document.getElementById("btn-download-csv").onclick = () => {
     window.location = `/api/runs/${id}/download`;
   };
+  const filterSel = document.getElementById("delivery-filter");
+  filterSel.value = "all";
+  filterSel.onchange = () => renderResults(currentRunResults, filterSel.value);
+  renderResults(results, "all");
+}
+
+// Renderiza badge colorida pro delivery_status real (vindo do webhook).
+// Volta texto cinza pro accepted (resposta da API) quando ainda não chegou webhook.
+function deliveryBadge(r) {
+  const ds = r.delivery_status;
+  if (ds === "read") return `<span class="badge badge-read">👁 read</span>`;
+  if (ds === "delivered") return `<span class="badge badge-delivered">✅ delivered</span>`;
+  if (ds === "sent") return `<span class="badge badge-sent">📨 sent</span>`;
+  if (ds === "failed") {
+    const err = r.delivery_error ? ` (${escapeHtml(r.delivery_error)})` : "";
+    return `<span class="badge badge-failed" title="${escapeAttr(r.delivery_error || "")}">❌ failed${err}</span>`;
+  }
+  // Sem update de webhook ainda: mostra "accepted" se a API aceitou
+  if (r.status === "ENVIADO") return `<span class="badge badge-accepted">⏳ accepted</span>`;
+  return `<span class="muted">—</span>`;
+}
+
+function passesFilter(r, filter) {
+  if (filter === "all") return true;
+  const ds = r.delivery_status;
+  if (filter === "delivered") return ds === "delivered" || ds === "read";
+  if (filter === "read") return ds === "read";
+  if (filter === "failed") return ds === "failed";
+  if (filter === "not_delivered") {
+    // Não entregues = qualquer um que foi ENVIADO mas não temos confirmação de delivered/read,
+    // ou que falhou pelo webhook.
+    if (r.status !== "ENVIADO" && r.status !== "PULADO" && !r.status?.startsWith?.("FALHA"))
+      return false;
+    if (ds === "failed") return true;
+    if (r.status === "ENVIADO" && ds !== "delivered" && ds !== "read") return true;
+    return false;
+  }
+  return true;
+}
+
+function renderResults(results, filter) {
+  const filtered = results.filter((r) => passesFilter(r, filter));
   const tbl = document.getElementById("results-table");
+  if (!filtered.length) {
+    tbl.innerHTML =
+      "<thead><tr><th>Telefone</th><th>Status</th><th>Entrega</th><th>WAMID</th><th>Motivo</th></tr></thead>" +
+      `<tbody><tr><td colspan="5" class="muted" style="text-align:center; padding:16px;">Nenhum resultado pra esse filtro.</td></tr></tbody>`;
+    return;
+  }
   tbl.innerHTML =
-    "<thead><tr><th>Telefone</th><th>Status</th><th>WAMID</th><th>Motivo</th></tr></thead><tbody>" +
-    results
+    "<thead><tr><th>Telefone</th><th>Status</th><th>Entrega</th><th>WAMID</th><th>Motivo</th></tr></thead><tbody>" +
+    filtered
       .map(
         (r) => `
       <tr>
         <td>${escapeHtml(r.phone)}</td>
         <td>${escapeHtml(r.status)}</td>
+        <td>${deliveryBadge(r)}</td>
         <td title="${escapeAttr(r.wamid || "")}">${escapeHtml((r.wamid || "").slice(0, 30))}</td>
         <td title="${escapeAttr(r.motivo || "")}">${escapeHtml((r.motivo || "").slice(0, 60))}</td>
       </tr>

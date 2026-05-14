@@ -15,6 +15,7 @@ import {
   listRuns,
   getRun,
   getRunResults,
+  updateDeliveryStatusByWamid,
 } from "./lib/db.js";
 import { normalizePhone } from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
@@ -100,6 +101,55 @@ app.post("/login", async (req, res) => {
 
 app.post("/logout", (req, res) => {
   req.session.destroy(() => res.redirect("/login"));
+});
+
+// ---------- WEBHOOK META (público — autenticado por verify token) ----------
+// Verificação: Meta chama GET com hub.mode/hub.verify_token/hub.challenge.
+// A gente devolve o challenge em texto puro se o token bater.
+app.get("/api/webhook", (req, res) => {
+  const expected = process.env.WHATSAPP_VERIFY_TOKEN;
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (!expected) {
+    return res.status(500).send("WHATSAPP_VERIFY_TOKEN não configurado no servidor");
+  }
+  if (mode === "subscribe" && token === expected) {
+    return res.status(200).send(String(challenge ?? ""));
+  }
+  return res.sendStatus(403);
+});
+
+// Recebe atualizações de status (sent/delivered/read/failed) e atualiza
+// run_results pelo wamid. Sempre responde 200 — a Meta retenta em loop se não.
+app.post("/api/webhook", (req, res) => {
+  try {
+    const entries = req.body?.entry || [];
+    for (const entry of entries) {
+      const changes = entry?.changes || [];
+      for (const change of changes) {
+        const statuses = change?.value?.statuses || [];
+        for (const st of statuses) {
+          const wamid = st?.id;
+          const status = st?.status; // sent | delivered | read | failed
+          if (!wamid || !status) continue;
+          let deliveryError = null;
+          if (status === "failed") {
+            const e0 = st?.errors?.[0];
+            if (e0) {
+              const code = e0.code ?? "?";
+              const title = e0.title || e0.message || "";
+              deliveryError = `${code}: ${title}`.slice(0, 200);
+            }
+          }
+          updateDeliveryStatusByWamid(wamid, status, deliveryError);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("webhook parse error:", e?.message || e);
+  }
+  res.sendStatus(200);
 });
 
 // ---------- APP (protegido) ----------
@@ -196,8 +246,10 @@ app.post("/api/disparo/start", async (req, res) => {
   if (!cfg.access_token || !cfg.phone_number_id || !cfg.template_name) {
     return res.status(400).json({ error: "Configure token, phone ID e template antes" });
   }
-  const { phoneCol, varCols } = req.body || {};
+  const { phoneCol, varCols, skipDuplicates } = req.body || {};
   if (!phoneCol) return res.status(400).json({ error: "Mapeie a coluna do telefone" });
+  // default true se não vier (ou vier null/undefined)
+  const skip = skipDuplicates === undefined || skipDuplicates === null ? true : !!skipDuplicates;
 
   // Monta leads
   const leads = [];
@@ -220,9 +272,10 @@ app.post("/api/disparo/start", async (req, res) => {
       templateName: cfg.template_name,
       language: cfg.language || "pt_BR",
       concurrency: Number(cfg.concurrency) || 10,
+      skipDuplicates: skip,
     });
     currentEvents = events;
-    res.json({ ok: true, runId, total: leads.length, invalidos });
+    res.json({ ok: true, runId, total: leads.length, invalidos, skipDuplicates: skip });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -284,10 +337,12 @@ app.get("/api/runs/:id/download", (req, res) => {
   const run = getRun(Number(req.params.id));
   if (!run) return res.status(404).send("Not found");
   const results = getRunResults(run.id);
-  const lines = ["telefone;status;wamid;motivo;ts"];
+  const lines = ["telefone;status;wamid;motivo;delivery_status;delivery_error;ts"];
+  const clean = (s) => (s || "").replace(/[\r\n;]/g, " ");
   for (const r of results) {
-    const motivo = (r.motivo || "").replace(/[\r\n;]/g, " ");
-    lines.push(`${r.phone};${r.status};${r.wamid || ""};${motivo};${r.ts}`);
+    lines.push(
+      `${r.phone};${r.status};${r.wamid || ""};${clean(r.motivo)};${r.delivery_status || ""};${clean(r.delivery_error)};${r.ts}`
+    );
   }
   res.setHeader("Content-Type", "text/csv");
   res.setHeader(

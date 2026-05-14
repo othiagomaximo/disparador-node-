@@ -11,8 +11,9 @@ Sistema profissional de disparo em massa pela WhatsApp Cloud API (Meta), portado
 - 📊 Dashboard ao vivo via SSE
 - 🛑 Parada automática em códigos críticos da Meta (368, 131048, 131049, 131056, 131031, 133000, 132012, 132015, 132016, 190)
 - 💾 Persistência em SQLite (substitui o `enviados.txt` do Python)
-- 🔄 Dedupe automático: pula quem já foi enviado
-- 📑 Histórico de runs + download de relatório CSV
+- 🔄 Dedupe automático (configurável: liga/desliga em tempo de disparo)
+- 📡 Webhook de status: sent / delivered / read / failed REAL (não só "accepted")
+- 📑 Histórico de runs + download de relatório CSV (com colunas de delivery)
 
 ## 🚀 Quick start (local)
 
@@ -67,6 +68,7 @@ Na seção de variáveis, adiciona:
 | `LOGIN_USER` | `maximo` (ou outro) |
 | `LOGIN_PASSWORD_HASH` | (do `npm run hash-pwd <senha>`) |
 | `META_API_VERSION` | `v22.0` |
+| `WHATSAPP_VERIFY_TOKEN` | (gera com `openssl rand -hex 16`, mesmo valor que vai no painel de Webhooks da Meta) |
 
 ### 4. Deploy
 
@@ -118,6 +120,47 @@ disparador-node/
 ├── data/                 # SQLite (gerado)
 └── uploads/              # CSVs temporários (gerado)
 ```
+
+## 📡 Webhook de status (status REAL de entrega)
+
+Por padrão, quando a Meta retorna `accepted`, o sistema marca como `ENVIADO`. Mas
+`accepted ≠ entregue`: se a BM tá shadow-banida ou bate limite, a Meta confirma
+o `accepted` e DEPOIS marca como `failed` via webhook. Sem escutar o webhook,
+o relatório fica mentindo.
+
+### 1. Gera o verify token
+
+```bash
+openssl rand -hex 16
+```
+
+Cola no `.env`:
+
+```
+WHATSAPP_VERIFY_TOKEN=<o-valor-gerado>
+```
+
+### 2. Configura no Meta Business Manager
+
+1. Meta Business → WhatsApp → Configuração → Webhooks
+2. **Callback URL**: `https://moccasin-chinchilla-561405.hostingersite.com/api/webhook`
+3. **Verify token**: o mesmo valor que tá no `WHATSAPP_VERIFY_TOKEN` do `.env`
+4. Clica **Verify and save** (a Meta vai bater GET no endpoint pra validar)
+5. Em **Webhook fields**, marca `messages` e clica **Subscribe**
+
+### 3. O que aparece no relatório
+
+Cada linha de resultado mostra a badge real do status:
+
+| Status | Significa |
+|---|---|
+| ⏳ accepted | Aceito pela API (ainda sem confirmação do webhook) |
+| 📨 sent | Meta confirmou que mandou pro destino |
+| ✅ delivered | Chegou no celular do cliente |
+| 👁 read | Cliente abriu a mensagem |
+| ❌ failed | Falhou na entrega (motivo no tooltip) |
+
+Use o filtro no relatório pra ver só "Não entregues", "Entregues" ou "Lidos".
 
 ## 🐛 Códigos de erro Meta que param o disparo
 
