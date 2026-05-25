@@ -220,15 +220,34 @@ async function loadRuns() {
       <span><b>#${run.id}</b></span>
       <span class="status-pill ${run.status}">${run.status}</span>
       <span class="muted">${run.started_at}</span>
-      <span style="margin-left:auto">
-        ✅ ${run.enviados} · ❌ ${run.falhas} · 📋 ${run.total}
+      <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
+        <span>✅ ${run.enviados} · ❌ ${run.falhas} · 📋 ${run.total}</span>
+        <button class="btn-row-download" data-id="${run.id}" title="Baixar CSV deste disparo" style="padding:4px 10px; font-size:12px;">⬇️ Baixar</button>
       </span>
     </div>
   `
     )
     .join("");
   list.querySelectorAll(".run-row").forEach((row) => {
-    row.addEventListener("click", () => loadRunDetail(row.dataset.id));
+    row.addEventListener("click", (e) => {
+      // Se clicou no botão de baixar, NÃO abrir o detalhe.
+      if (e.target.closest(".btn-row-download")) return;
+      loadRunDetail(row.dataset.id);
+    });
+  });
+  list.querySelectorAll(".btn-row-download").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      // Cria <a download> invisível e clica — evita problemas de window.location
+      // com cookies/popups e força attachment.
+      const link = document.createElement("a");
+      link.href = `/api/runs/${id}/download`;
+      link.download = `relatorio_run_${id}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    });
   });
 }
 
