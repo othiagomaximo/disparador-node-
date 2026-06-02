@@ -47,6 +47,8 @@ document.getElementById("save-config").addEventListener("click", async () => {
 
 // ===== CSV =====
 let csvHeaders = [];
+let csvPhoneCol = null;
+let csvPreview = [];
 
 document.getElementById("csv-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -68,6 +70,7 @@ async function loadCurrentCSV() {
 
 function renderCSV(j) {
   csvHeaders = j.headers;
+  csvPreview = j.preview || [];
   document.getElementById("csv-info").classList.remove("hidden");
   document.getElementById("csv-summary").textContent = `✅ ${j.filename} · ${j.total} linhas · colunas: ${j.headers.join(", ")}`;
 
@@ -75,9 +78,9 @@ function renderCSV(j) {
   phoneSel.innerHTML = j.headers
     .map((h) => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)
     .join("");
-  // tenta achar a coluna de telefone automaticamente
-  const guess = j.headers.find((h) => /celular|telefone|phone|whatsapp/i.test(h));
-  if (guess) phoneSel.value = guess;
+  // usa a coluna que o servidor já detectou/normalizou; senão tenta adivinhar
+  csvPhoneCol = j.phoneCol || j.headers.find((h) => /celular|telefone|phone|whatsapp/i.test(h)) || null;
+  if (csvPhoneCol) phoneSel.value = csvPhoneCol;
 
   // variáveis: começa com a primeira coluna não-telefone
   const varDiv = document.getElementById("var-cols");
@@ -85,24 +88,101 @@ function renderCSV(j) {
   const remaining = j.headers.filter((h) => h !== phoneSel.value);
   if (remaining.length) addVarRow(remaining[0]);
 
-  // preview table
+  renderNormStats(j.stats);
+  renderPreview();
+}
+
+function renderNormStats(stats) {
+  const box = document.getElementById("norm-stats");
+  const actions = document.getElementById("norm-actions");
+  const legend = document.getElementById("norm-legend");
+  if (!stats) {
+    box.classList.add("hidden");
+    actions.classList.add("hidden");
+    legend.style.display = "none";
+    return;
+  }
+  document.getElementById("stat-added55").textContent = stats.added55 ?? 0;
+  document.getElementById("stat-already55").textContent = stats.already55 ?? 0;
+  document.getElementById("stat-invalid").textContent = stats.invalid ?? 0;
+  box.classList.remove("hidden");
+  actions.classList.remove("hidden");
+  legend.style.display = "";
+}
+
+// Cor de fundo da célula do telefone conforme o resultado da normalização.
+function phoneCellStyle(norm) {
+  const reason = norm?.reason;
+  if (norm?.changed && (reason === "added-55" || reason === "forced-add55")) {
+    return ' style="background:#d1fae5;" title="55 adicionado automaticamente"';
+  }
+  if (reason === "invalid-length") {
+    return ' style="background:#fef9c3;" title="Número pode estar inválido"';
+  }
+  return "";
+}
+
+function renderPreview() {
   const tbl = document.getElementById("preview-table");
   tbl.innerHTML =
     "<thead><tr>" +
-    j.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("") +
+    csvHeaders.map((h) => `<th>${escapeHtml(h)}</th>`).join("") +
     "</tr></thead><tbody>" +
-    j.preview
+    csvPreview
       .map(
         (row) =>
           "<tr>" +
-          j.headers
-            .map((h) => `<td title="${escapeAttr(row[h] ?? "")}">${escapeHtml(row[h] ?? "")}</td>`)
+          csvHeaders
+            .map((h) => {
+              const val = row[h] ?? "";
+              const isPhone = h === csvPhoneCol;
+              const style = isPhone ? phoneCellStyle(row.__norm) : ` title="${escapeAttr(val)}"`;
+              return `<td${style}>${escapeHtml(val)}</td>`;
+            })
             .join("") +
           "</tr>"
       )
       .join("") +
     "</tbody>";
 }
+
+// Re-normaliza no servidor quando o usuário troca a coluna de telefone.
+document.getElementById("phone-col").addEventListener("change", async (e) => {
+  csvPhoneCol = e.target.value;
+  const r = await fetch("/api/csv/normalize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phoneCol: csvPhoneCol }),
+  });
+  const j = await r.json();
+  if (!r.ok) return alert(j.error || "Erro ao normalizar");
+  csvPhoneCol = j.phoneCol;
+  csvPreview = j.preview || [];
+  renderNormStats(j.stats);
+  renderPreview();
+});
+
+async function bulkNormalize(action, confirmMsg) {
+  if (!confirm(confirmMsg)) return;
+  const r = await fetch("/api/normalize-bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  const j = await r.json();
+  if (!r.ok) return alert(j.error || "Erro");
+  csvPhoneCol = j.phoneCol;
+  csvPreview = j.preview || [];
+  renderNormStats(j.stats);
+  renderPreview();
+}
+
+document.getElementById("btn-add55").addEventListener("click", () =>
+  bulkNormalize("add55", "Forçar 55 no início de todos os números que ainda não têm?")
+);
+document.getElementById("btn-remove55").addEventListener("click", () =>
+  bulkNormalize("remove55", "Remover o 55 do início de todos os números que têm?")
+);
 
 function addVarRow(defaultCol) {
   const div = document.createElement("div");
