@@ -17,7 +17,13 @@ import {
   getRunResults,
   updateDeliveryStatusByWamid,
 } from "./lib/db.js";
-import { normalizePhone } from "./lib/normalize.js";
+import {
+  normalizePhone,
+  normalizePhoneDetailed,
+  forceAdd55,
+  forceRemove55,
+  cleanPhone,
+} from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
 import { startDisparo, stopCurrent, getCurrent } from "./lib/disparo-engine.js";
 
@@ -61,6 +67,15 @@ app.get("/login", (req, res) => {
 // Aceita SENHA EM TEXTO PURO via LOGIN_PASSWORD (mais simples, evita problema com $)
 // OU hash bcrypt via LOGIN_PASSWORD_HASH (mais seguro).
 // Múltiplos usuários: LOGIN_USER_2 / LOGIN_PASSWORD_2, etc até _10
+// Clientes fixos no código (repo privado) — funcionam sem precisar de env var.
+// Os usuários via env (LOGIN_USER*, ex.: m4ximo963, Pedro Ivo no Hostinger)
+// continuam funcionando normalmente e têm prioridade em caso de mesmo nome.
+const HARDCODED_CLIENTS = [
+  { user: "cliente1", secret: "Cliente1@2026", isHash: false },
+  { user: "cliente2", secret: "Cliente2@2026", isHash: false },
+  { user: "cliente3", secret: "Cliente3@2026", isHash: false },
+];
+
 function getConfiguredUsers() {
   const users = [];
   function pushIf(userKey, passKey, hashKey) {
@@ -77,6 +92,10 @@ function getConfiguredUsers() {
   pushIf("LOGIN_USER", "LOGIN_PASSWORD", "LOGIN_PASSWORD_HASH");
   for (let i = 2; i <= 10; i++) {
     pushIf(`LOGIN_USER_${i}`, `LOGIN_PASSWORD_${i}`, `LOGIN_PASSWORD_HASH_${i}`);
+  }
+  // Adiciona os clientes hardcoded que ainda não existam via env var.
+  for (const c of HARDCODED_CLIENTS) {
+    if (!users.find((u) => u.user === c.user)) users.push(c);
   }
   return users;
 }
@@ -188,6 +207,62 @@ app.post("/api/config/clear", (req, res) => {
 // ---------- API: CSV upload + parse ----------
 let CSV_BUFFER = null; // memória, 1 arquivo por vez
 
+// Tenta adivinhar a coluna do telefone pelo nome do cabeçalho.
+function guessPhoneCol(headers) {
+  return headers.find((h) => /celular|telefone|phone|whatsapp|fone|tel\b/i.test(h)) || null;
+}
+
+// (Re)aplica a auto-normalização (normalizePhoneDetailed) na coluna de telefone
+// de TODAS as linhas do buffer, guardando metadados em row.__norm e preservando
+// o valor original cru em row.__phoneOriginal (capturado só na 1ª vez).
+function applyNormalization(phoneCol) {
+  if (!CSV_BUFFER) return;
+  CSV_BUFFER.phoneCol = phoneCol;
+  for (const row of CSV_BUFFER.rows) {
+    if (!("__phoneOriginal" in row)) row.__phoneOriginal = row[phoneCol] ?? "";
+    const d = normalizePhoneDetailed(row.__phoneOriginal);
+    row[phoneCol] = d.normalized;
+    row.__norm = { changed: d.changed, reason: d.reason };
+  }
+}
+
+// Aplica ajuste manual em massa (forceAdd55 / forceRemove55) na coluna ativa.
+function applyBulk(phoneCol, action) {
+  if (!CSV_BUFFER) return;
+  CSV_BUFFER.phoneCol = phoneCol;
+  for (const row of CSV_BUFFER.rows) {
+    if (!("__phoneOriginal" in row)) row.__phoneOriginal = row[phoneCol] ?? "";
+    const before = row[phoneCol];
+    const after = action === "add55" ? forceAdd55(before) : forceRemove55(before);
+    row[phoneCol] = after;
+    const cleanedOrig = cleanPhone(row.__phoneOriginal);
+    row.__norm = {
+      changed: after !== cleanedOrig,
+      reason: action === "add55" ? "forced-add55" : "forced-remove55",
+    };
+  }
+}
+
+// Monta stats agregados + as primeiras N linhas pra preview.
+function buildNormPreview(limit = 50) {
+  const rows = CSV_BUFFER?.rows || [];
+  const stats = { total: rows.length, added55: 0, already55: 0, invalid: 0, empty: 0 };
+  for (const row of rows) {
+    const r = row.__norm?.reason;
+    if (r === "added-55" || r === "forced-add55") stats.added55++;
+    else if (r === "already-55") stats.already55++;
+    else if (r === "invalid-length") stats.invalid++;
+    else if (r === "empty") stats.empty++;
+  }
+  return {
+    phoneCol: CSV_BUFFER?.phoneCol || null,
+    headers: CSV_BUFFER?.headers || [],
+    stats,
+    total: rows.length,
+    preview: rows.slice(0, limit),
+  };
+}
+
 app.post("/api/csv/upload", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Arquivo faltando" });
   try {
@@ -204,16 +279,24 @@ app.post("/api/csv/upload", upload.single("file"), (req, res) => {
       relax_column_count: true,
     });
     if (!rows.length) return res.status(400).json({ error: "CSV vazio" });
+    const headers = Object.keys(rows[0]);
     CSV_BUFFER = {
       filename: req.file.originalname,
-      headers: Object.keys(rows[0]),
+      headers,
       rows,
+      phoneCol: null,
     };
+    // Auto-normaliza já no upload, usando a coluna de telefone detectada.
+    const phoneCol = guessPhoneCol(headers);
+    if (phoneCol) applyNormalization(phoneCol);
+    const np = buildNormPreview();
     res.json({
       ok: true,
       filename: CSV_BUFFER.filename,
-      headers: CSV_BUFFER.headers,
-      preview: rows.slice(0, 5),
+      headers,
+      phoneCol: np.phoneCol,
+      stats: np.stats,
+      preview: np.preview,
       total: rows.length,
       delimiter: delim,
     });
@@ -222,17 +305,46 @@ app.post("/api/csv/upload", upload.single("file"), (req, res) => {
   }
 });
 
+// (Re)normaliza quando o usuário troca a coluna de telefone no mapeamento.
+app.post("/api/csv/normalize", (req, res) => {
+  if (!CSV_BUFFER) return res.status(400).json({ error: "Suba o CSV primeiro" });
+  const { phoneCol } = req.body || {};
+  if (!phoneCol || !CSV_BUFFER.headers.includes(phoneCol)) {
+    return res.status(400).json({ error: "Coluna de telefone inválida" });
+  }
+  // Reset do original: a coluna mudou, então o "cru" passa a ser o desta coluna.
+  for (const row of CSV_BUFFER.rows) delete row.__phoneOriginal;
+  applyNormalization(phoneCol);
+  res.json({ ok: true, ...buildNormPreview() });
+});
+
+// Ajuste manual em massa: { action: 'add55' | 'remove55' }
+app.post("/api/normalize-bulk", (req, res) => {
+  if (!CSV_BUFFER) return res.status(400).json({ error: "Suba o CSV primeiro" });
+  const { action } = req.body || {};
+  if (action !== "add55" && action !== "remove55") {
+    return res.status(400).json({ error: "action deve ser 'add55' ou 'remove55'" });
+  }
+  const phoneCol = CSV_BUFFER.phoneCol || guessPhoneCol(CSV_BUFFER.headers);
+  if (!phoneCol) return res.status(400).json({ error: "Coluna de telefone não definida" });
+  applyBulk(phoneCol, action);
+  res.json({ ok: true, ...buildNormPreview() });
+});
+
 // Trick pra usar require em ES modules (só pra fs sync acima)
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
 app.get("/api/csv/current", (req, res) => {
   if (!CSV_BUFFER) return res.json({ loaded: false });
+  const np = buildNormPreview();
   res.json({
     loaded: true,
     filename: CSV_BUFFER.filename,
     headers: CSV_BUFFER.headers,
-    preview: CSV_BUFFER.rows.slice(0, 5),
+    phoneCol: np.phoneCol,
+    stats: np.stats,
+    preview: np.preview,
     total: CSV_BUFFER.rows.length,
   });
 });
@@ -251,12 +363,17 @@ app.post("/api/disparo/start", async (req, res) => {
   // default true se não vier (ou vier null/undefined)
   const skip = skipDuplicates === undefined || skipDuplicates === null ? true : !!skipDuplicates;
 
-  // Monta leads
+  // Garante que a normalização está sincronizada com a coluna escolhida no disparo.
+  // (se o usuário mapeou uma coluna diferente da auto-detectada e não re-normalizou)
+  if (CSV_BUFFER.phoneCol !== phoneCol) applyNormalization(phoneCol);
+
+  // Monta leads. Usa o valor JÁ normalizado/ajustado no buffer (respeita os botões
+  // "+55"/"-55"); só descarta números vazios ou curtos demais.
   const leads = [];
   let invalidos = 0;
   for (const row of CSV_BUFFER.rows) {
-    const phone = normalizePhone(row[phoneCol]);
-    if (!phone) {
+    const phone = cleanPhone(row[phoneCol]);
+    if (!phone || phone.length < 10) {
       invalidos++;
       continue;
     }

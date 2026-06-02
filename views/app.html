@@ -77,6 +77,19 @@
         <div id="var-cols"></div>
         <button id="add-var" class="ghost">+ Adicionar variável</button>
         <h3>Preview</h3>
+        <div id="norm-stats" class="cards hidden" style="margin-bottom:12px;">
+          <div class="card success"><h4>Normalizados +55</h4><b id="stat-added55">0</b></div>
+          <div class="card"><h4>Já tinham 55</h4><b id="stat-already55">0</b></div>
+          <div class="card warn"><h4>Inválidos</h4><b id="stat-invalid">0</b></div>
+        </div>
+        <div id="norm-actions" class="row hidden" style="gap:8px; margin-bottom:12px;">
+          <button id="btn-add55" class="ghost" type="button">+ Adicionar 55 em todos</button>
+          <button id="btn-remove55" class="ghost" type="button">− Remover 55 de todos</button>
+        </div>
+        <p class="muted" id="norm-legend" style="display:none;">
+          <span style="background:#d1fae5; padding:1px 6px; border-radius:3px;">verde</span> = 55 adicionado automaticamente ·
+          <span style="background:#fef9c3; padding:1px 6px; border-radius:3px;">amarelo</span> = número pode estar inválido
+        </p>
         <div class="table-wrap"><table id="preview-table"></table></div>
       </div>
     </section>
