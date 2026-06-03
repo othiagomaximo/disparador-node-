@@ -377,30 +377,6 @@ app.get("/api/csv/current", (req, res) => {
 // ---------- API: Disparo ----------
 let currentEvents = null;
 
-// Stats agregados pra mostrar ANTES de iniciar o disparo (tela "3. Disparo").
-// Lê os metadados de normalização (row.__norm) já calculados no buffer.
-app.get("/api/disparo/stats", (req, res) => {
-  if (!CSV_BUFFER || !CSV_BUFFER.rows.length) {
-    return res.json({ total: 0, normalizados: 0, jaTinham55: 0, invalidos: 0 });
-  }
-  let normalizados = 0;
-  let jaTinham55 = 0;
-  let invalidos = 0;
-  for (const row of CSV_BUFFER.rows) {
-    const n = row.__norm;
-    if (!n) continue;
-    if (n.reason === "invalid-length" || n.reason === "empty") invalidos++;
-    else if (n.changed && (n.reason === "added-55" || n.reason === "forced-add55")) normalizados++;
-    else jaTinham55++;
-  }
-  res.json({
-    total: CSV_BUFFER.rows.length,
-    normalizados,
-    jaTinham55,
-    invalidos,
-  });
-});
-
 // Retorna a PRIMEIRA mensagem renderizada (variáveis substituídas) pro user
 // confirmar antes de disparar. Aceita phoneCol e varCols (CSV de colunas) via
 // query string — espelha o mapeamento atual da tela de disparo.
