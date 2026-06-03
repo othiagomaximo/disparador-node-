@@ -8,24 +8,8 @@ navBtns.forEach((b) => {
     b.classList.add("active");
     document.querySelector(`.pane[data-pane="${b.dataset.tab}"]`).classList.add("active");
     if (b.dataset.tab === "relatorio") loadRuns();
-    if (b.dataset.tab === "disparo") loadDisparoStats();
   });
 });
-
-// Stats pré-disparo: busca o resumo do CSV já normalizado pra mostrar ANTES
-// de iniciar o disparo (quantos vão receber +55, quantos já tinham, inválidos).
-async function loadDisparoStats() {
-  try {
-    const r = await fetch("/api/disparo/stats");
-    const s = await r.json();
-    document.getElementById("pre-stat-total").textContent = s.total;
-    document.getElementById("pre-stat-norm").textContent = s.normalizados;
-    document.getElementById("pre-stat-tinham").textContent = s.jaTinham55;
-    document.getElementById("pre-stat-inv").textContent = s.invalidos;
-  } catch (e) {
-    console.error(e);
-  }
-}
 
 // ===== Config =====
 async function loadConfig() {
@@ -144,7 +128,6 @@ document.getElementById("phone-col").addEventListener("change", async (e) => {
   csvPhoneCol = j.phoneCol;
   csvPreview = j.preview || [];
   renderPreview();
-  loadDisparoStats(); // mantém o resumo pré-disparo coerente com a coluna escolhida
 });
 
 function addVarRow(defaultCol) {
