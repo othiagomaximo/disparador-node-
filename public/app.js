@@ -8,8 +8,24 @@ navBtns.forEach((b) => {
     b.classList.add("active");
     document.querySelector(`.pane[data-pane="${b.dataset.tab}"]`).classList.add("active");
     if (b.dataset.tab === "relatorio") loadRuns();
+    if (b.dataset.tab === "disparo") loadDisparoStats();
   });
 });
+
+// Stats pré-disparo: busca o resumo do CSV já normalizado pra mostrar ANTES
+// de iniciar o disparo (quantos vão receber +55, quantos já tinham, inválidos).
+async function loadDisparoStats() {
+  try {
+    const r = await fetch("/api/disparo/stats");
+    const s = await r.json();
+    document.getElementById("pre-stat-total").textContent = s.total;
+    document.getElementById("pre-stat-norm").textContent = s.normalizados;
+    document.getElementById("pre-stat-tinham").textContent = s.jaTinham55;
+    document.getElementById("pre-stat-inv").textContent = s.invalidos;
+  } catch (e) {
+    console.error(e);
+  }
+}
 
 // ===== Config =====
 async function loadConfig() {
@@ -88,40 +104,11 @@ function renderCSV(j) {
   const remaining = j.headers.filter((h) => h !== phoneSel.value);
   if (remaining.length) addVarRow(remaining[0]);
 
-  renderNormStats(j.stats);
   renderPreview();
 }
 
-function renderNormStats(stats) {
-  const box = document.getElementById("norm-stats");
-  const actions = document.getElementById("norm-actions");
-  const legend = document.getElementById("norm-legend");
-  if (!stats) {
-    box.classList.add("hidden");
-    actions.classList.add("hidden");
-    legend.style.display = "none";
-    return;
-  }
-  document.getElementById("stat-added55").textContent = stats.added55 ?? 0;
-  document.getElementById("stat-already55").textContent = stats.already55 ?? 0;
-  document.getElementById("stat-invalid").textContent = stats.invalid ?? 0;
-  box.classList.remove("hidden");
-  actions.classList.remove("hidden");
-  legend.style.display = "";
-}
-
-// Cor de fundo da célula do telefone conforme o resultado da normalização.
-function phoneCellStyle(norm) {
-  const reason = norm?.reason;
-  if (norm?.changed && (reason === "added-55" || reason === "forced-add55")) {
-    return ' style="background:#d1fae5;color:#065f46;font-weight:600;" title="55 adicionado automaticamente"';
-  }
-  if (reason === "invalid-length") {
-    return ' style="background:#fef9c3;color:#78350f;font-weight:600;" title="Número pode estar inválido"';
-  }
-  return "";
-}
-
+// Tabela neutra: só mostra os dados (telefone já vem normalizado do servidor).
+// Sem cores/normalização visual — o "negócio do 55" saiu da UI.
 function renderPreview() {
   const tbl = document.getElementById("preview-table");
   tbl.innerHTML =
@@ -135,9 +122,7 @@ function renderPreview() {
           csvHeaders
             .map((h) => {
               const val = row[h] ?? "";
-              const isPhone = h === csvPhoneCol;
-              const style = isPhone ? phoneCellStyle(row.__norm) : ` title="${escapeAttr(val)}"`;
-              return `<td${style}>${escapeHtml(val)}</td>`;
+              return `<td title="${escapeAttr(val)}">${escapeHtml(val)}</td>`;
             })
             .join("") +
           "</tr>"
@@ -158,31 +143,9 @@ document.getElementById("phone-col").addEventListener("change", async (e) => {
   if (!r.ok) return alert(j.error || "Erro ao normalizar");
   csvPhoneCol = j.phoneCol;
   csvPreview = j.preview || [];
-  renderNormStats(j.stats);
   renderPreview();
+  loadDisparoStats(); // mantém o resumo pré-disparo coerente com a coluna escolhida
 });
-
-async function bulkNormalize(action, confirmMsg) {
-  if (!confirm(confirmMsg)) return;
-  const r = await fetch("/api/normalize-bulk", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
-  });
-  const j = await r.json();
-  if (!r.ok) return alert(j.error || "Erro");
-  csvPhoneCol = j.phoneCol;
-  csvPreview = j.preview || [];
-  renderNormStats(j.stats);
-  renderPreview();
-}
-
-document.getElementById("btn-add55").addEventListener("click", () =>
-  bulkNormalize("add55", "Forçar 55 no início de todos os números que ainda não têm?")
-);
-document.getElementById("btn-remove55").addEventListener("click", () =>
-  bulkNormalize("remove55", "Remover o 55 do início de todos os números que têm?")
-);
 
 function addVarRow(defaultCol) {
   const div = document.createElement("div");

@@ -76,20 +76,8 @@
         <p class="muted">Cada linha vira <code>{{1}}</code>, <code>{{2}}</code>, ... na ordem.</p>
         <div id="var-cols"></div>
         <button id="add-var" class="ghost">+ Adicionar variável</button>
-        <h3>Preview</h3>
-        <div id="norm-stats" class="cards hidden" style="margin-bottom:12px;">
-          <div class="card success"><h4>Normalizados +55</h4><b id="stat-added55">0</b></div>
-          <div class="card"><h4>Já tinham 55</h4><b id="stat-already55">0</b></div>
-          <div class="card warn"><h4>Inválidos</h4><b id="stat-invalid">0</b></div>
-        </div>
-        <div id="norm-actions" class="row hidden" style="gap:8px; margin-bottom:12px;">
-          <button id="btn-add55" class="ghost" type="button">+ Adicionar 55 em todos</button>
-          <button id="btn-remove55" class="ghost" type="button">− Remover 55 de todos</button>
-        </div>
-        <p class="muted" id="norm-legend" style="display:none;">
-          <span style="background:#d1fae5; padding:1px 6px; border-radius:3px;">verde</span> = 55 adicionado automaticamente ·
-          <span style="background:#fef9c3; padding:1px 6px; border-radius:3px;">amarelo</span> = número pode estar inválido
-        </p>
+        <h3>Pré-visualização dos dados</h3>
+        <p class="muted">Confira se o CSV foi lido certo. A coluna do telefone já aparece com o <code>+55</code> aplicado.</p>
         <div class="table-wrap"><table id="preview-table"></table></div>
       </div>
     </section>
@@ -97,6 +85,15 @@
     <!-- TAB 3 - DISPARO -->
     <section data-pane="disparo" class="pane">
       <h2>Disparo em massa</h2>
+      <section id="disparo-stats-pre" style="margin-bottom:16px;">
+        <h3 style="margin-bottom:8px;">📊 Resumo do disparo</h3>
+        <div class="cards">
+          <div class="card"><h4>Total de leads</h4><b id="pre-stat-total">—</b></div>
+          <div class="card success"><h4>Receberão +55</h4><b id="pre-stat-norm">—</b></div>
+          <div class="card"><h4>Já tinham 55</h4><b id="pre-stat-tinham">—</b></div>
+          <div class="card warn"><h4>Inválidos (pulados)</h4><b id="pre-stat-inv">—</b></div>
+        </div>
+      </section>
       <div class="cards">
         <div class="card"><h4>Total</h4><b id="stat-total">—</b></div>
         <div class="card success"><h4>Enviados</h4><b id="stat-enviados">0</b></div>
