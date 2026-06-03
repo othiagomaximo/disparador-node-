@@ -114,10 +114,10 @@ function renderNormStats(stats) {
 function phoneCellStyle(norm) {
   const reason = norm?.reason;
   if (norm?.changed && (reason === "added-55" || reason === "forced-add55")) {
-    return ' style="background:#d1fae5;" title="55 adicionado automaticamente"';
+    return ' style="background:#d1fae5;color:#065f46;font-weight:600;" title="55 adicionado automaticamente"';
   }
   if (reason === "invalid-length") {
-    return ' style="background:#fef9c3;" title="Número pode estar inválido"';
+    return ' style="background:#fef9c3;color:#78350f;font-weight:600;" title="Número pode estar inválido"';
   }
   return "";
 }
