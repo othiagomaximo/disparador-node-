@@ -108,6 +108,13 @@
         <input type="checkbox" id="chk-skip-duplicates" checked />
         <span>Pular números já enviados em disparos anteriores <span class="muted">(recomendado)</span></span>
       </label>
+      <div class="row" style="margin-bottom:12px;">
+        <button id="btn-preview-first" class="ghost">👁 Pré-visualizar 1ª mensagem</button>
+      </div>
+      <div id="preview-first" class="card hidden" style="margin-bottom:12px; text-align:left;">
+        <h4 style="margin:0 0 8px;">Previsão do envio</h4>
+        <div id="preview-first-body" style="font-size:14px; line-height:1.6;"></div>
+      </div>
       <div class="row">
         <button id="btn-start" class="primary">▶️ Iniciar disparo</button>
         <button id="btn-stop" class="danger">⏹ Parar</button>
