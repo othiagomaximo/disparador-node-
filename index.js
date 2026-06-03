@@ -39,7 +39,15 @@ const MemoryStore = createMemoryStore(session);
 
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
-app.use(express.static(join(__dirname, "public")));
+// no-cache nos assets estáticos (app.js, style.css): força o browser a
+// revalidar a cada load. Sem isso, após um deploy o navegador pode rodar
+// um app.js ANTIGO em cima do app.html NOVO — handlers órfãos quebram a
+// página inteira (regressão de cache, não de código). 304 quando inalterado.
+app.use(
+  express.static(join(__dirname, "public"), {
+    setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
+  })
+);
 
 app.use(
   session({
@@ -175,6 +183,8 @@ app.post("/api/webhook", (req, res) => {
 app.use(requireAuth);
 
 app.get("/", (req, res) => {
+  // Idem: HTML sempre revalidado, pra nunca casar HTML novo com app.js velho.
+  res.setHeader("Cache-Control", "no-cache");
   res.sendFile(join(__dirname, "views", "app.html"));
 });
 
