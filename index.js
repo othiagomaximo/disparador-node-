@@ -217,10 +217,14 @@ function guessPhoneCol(headers) {
 // o valor original cru em row.__phoneOriginal (capturado só na 1ª vez).
 function applyNormalization(phoneCol) {
   if (!CSV_BUFFER) return;
+  // RESTAURA TODAS as colunas do snapshot original antes de qualquer
+  // coisa. Isso desfaz qualquer mutação de chamadas anteriores.
+  CSV_BUFFER.rows = CSV_BUFFER.rowsOriginal.map((r) => ({ ...r }));
   CSV_BUFFER.phoneCol = phoneCol;
   for (const row of CSV_BUFFER.rows) {
-    if (!("__phoneOriginal" in row)) row.__phoneOriginal = row[phoneCol] ?? "";
-    const d = normalizePhoneDetailed(row.__phoneOriginal);
+    const original = row[phoneCol] ?? "";
+    const d = normalizePhoneDetailed(original);
+    row.__phoneOriginal = original;
     row[phoneCol] = d.normalized;
     row.__norm = { changed: d.changed, reason: d.reason };
   }
@@ -229,13 +233,17 @@ function applyNormalization(phoneCol) {
 // Aplica ajuste manual em massa (forceAdd55 / forceRemove55) na coluna ativa.
 function applyBulk(phoneCol, action) {
   if (!CSV_BUFFER) return;
+  // Restaura snapshot antes. Como o usuario pode ter feito
+  // applyNormalization e DEPOIS o bulk, restauramos do original
+  // direto e aplicamos so o bulk.
+  CSV_BUFFER.rows = CSV_BUFFER.rowsOriginal.map((r) => ({ ...r }));
   CSV_BUFFER.phoneCol = phoneCol;
   for (const row of CSV_BUFFER.rows) {
-    if (!("__phoneOriginal" in row)) row.__phoneOriginal = row[phoneCol] ?? "";
-    const before = row[phoneCol];
-    const after = action === "add55" ? forceAdd55(before) : forceRemove55(before);
+    const original = row[phoneCol] ?? "";
+    const after = action === "add55" ? forceAdd55(original) : forceRemove55(original);
+    row.__phoneOriginal = original;
     row[phoneCol] = after;
-    const cleanedOrig = cleanPhone(row.__phoneOriginal);
+    const cleanedOrig = cleanPhone(original);
     row.__norm = {
       changed: after !== cleanedOrig,
       reason: action === "add55" ? "forced-add55" : "forced-remove55",
@@ -280,10 +288,14 @@ app.post("/api/csv/upload", upload.single("file"), (req, res) => {
     });
     if (!rows.length) return res.status(400).json({ error: "CSV vazio" });
     const headers = Object.keys(rows[0]);
+    // Clona profundamente as linhas pra preservar valores originais.
+    // applyNormalization vai modificar CSV_BUFFER.rows mas rowsOriginal
+    // mantém intocado.
     CSV_BUFFER = {
       filename: req.file.originalname,
       headers,
-      rows,
+      rows: rows.map((r) => ({ ...r })),
+      rowsOriginal: rows.map((r) => ({ ...r })),
       phoneCol: null,
     };
     // Auto-normaliza já no upload, usando a coluna de telefone detectada.
@@ -312,8 +324,8 @@ app.post("/api/csv/normalize", (req, res) => {
   if (!phoneCol || !CSV_BUFFER.headers.includes(phoneCol)) {
     return res.status(400).json({ error: "Coluna de telefone inválida" });
   }
-  // Reset do original: a coluna mudou, então o "cru" passa a ser o desta coluna.
-  for (const row of CSV_BUFFER.rows) delete row.__phoneOriginal;
+  // applyNormalization restaura do snapshot rowsOriginal antes de normalizar,
+  // então trocar a coluna não corrompe as demais (cada chamada parte do cru).
   applyNormalization(phoneCol);
   res.json({ ok: true, ...buildNormPreview() });
 });
@@ -351,6 +363,37 @@ app.get("/api/csv/current", (req, res) => {
 
 // ---------- API: Disparo ----------
 let currentEvents = null;
+
+// Retorna a PRIMEIRA mensagem renderizada (variáveis substituídas) pro user
+// confirmar antes de disparar. Aceita phoneCol e varCols (CSV de colunas) via
+// query string — espelha o mapeamento atual da tela de disparo.
+app.get("/api/disparo/preview-first", (req, res) => {
+  if (!CSV_BUFFER || !CSV_BUFFER.rows.length) {
+    return res.status(400).json({ error: "Suba CSV primeiro" });
+  }
+  const cfg = getAllConfig();
+  const phoneCol =
+    req.query.phoneCol || CSV_BUFFER.phoneCol || guessPhoneCol(CSV_BUFFER.headers);
+  const varCols = req.query.varCols
+    ? String(req.query.varCols)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+  const row = CSV_BUFFER.rows[0];
+  const phone = phoneCol ? cleanPhone(row[phoneCol]) : "";
+  const variables = varCols.map((c, i) => ({
+    index: i + 1,
+    column: c,
+    value: row[c] ?? "",
+  }));
+  res.json({
+    phone,
+    template_name: cfg.template_name || null,
+    language: cfg.language || "pt_BR",
+    variables,
+  });
+});
 
 app.post("/api/disparo/start", async (req, res) => {
   if (!CSV_BUFFER) return res.status(400).json({ error: "Suba o CSV primeiro" });
