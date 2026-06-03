@@ -178,37 +178,60 @@ document.getElementById("add-var").addEventListener("click", (e) => {
 // ===== Disparo =====
 let evtSource = null;
 
-// Pré-visualiza a 1ª mensagem renderizada (variáveis substituídas) antes de disparar.
-document.getElementById("btn-preview-first").addEventListener("click", async () => {
+// Pré-visualiza a 1ª mensagem renderizada (variáveis substituídas) antes de
+// disparar. Função compartilhada pelos botões das telas "2. CSV + Mapear" e
+// "3. Disparo" — lê o mapeamento atual (coluna do telefone + variáveis) do DOM
+// e renderiza o card no container informado. Reutiliza GET /api/disparo/preview-first.
+async function renderPreviewFirstInto(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
   const phoneCol = document.getElementById("phone-col").value;
   const varCols = Array.from(
     document.querySelectorAll("#var-cols .var-row select")
   ).map((s) => s.value);
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
-  const qs = new URLSearchParams({ phoneCol, varCols: varCols.join(",") });
-  const r = await fetch(`/api/disparo/preview-first?${qs}`);
-  const j = await r.json();
-  if (!r.ok) return alert(j.error || "Erro ao gerar pré-visualização");
-  const box = document.getElementById("preview-first");
-  const tmpl = j.template_name
-    ? escapeHtml(j.template_name)
-    : '<span style="color:var(--error)">⚠️ template não configurado</span>';
-  const vars = j.variables.length
-    ? j.variables
-        .map(
-          (v) =>
-            `<div><b>{{${v.index}}}</b> <span class="muted">(${escapeHtml(
-              v.column
-            )})</span> = ${escapeHtml(v.value || "—")}</div>`
-        )
-        .join("")
-    : '<div class="muted">Sem variáveis mapeadas.</div>';
-  document.getElementById("preview-first-body").innerHTML =
-    `<div><b>Pra:</b> ${escapeHtml(j.phone || "—")}</div>` +
-    `<div><b>Template:</b> ${tmpl} <span class="muted">(${escapeHtml(j.language)})</span></div>` +
-    `<div style="margin-top:8px;">${vars}</div>`;
-  box.classList.remove("hidden");
-});
+  container.innerHTML = '<div class="muted">Carregando preview...</div>';
+  try {
+    const qs = new URLSearchParams({ phoneCol, varCols: varCols.join(",") });
+    const r = await fetch(`/api/disparo/preview-first?${qs}`);
+    const j = await r.json();
+    if (!r.ok) {
+      container.innerHTML = `<div style="color:var(--error)">Erro: ${escapeHtml(
+        j.error || "HTTP " + r.status
+      )}</div>`;
+      return;
+    }
+    const tmpl = j.template_name
+      ? escapeHtml(j.template_name)
+      : '<span style="color:var(--error)">⚠️ template não configurado</span>';
+    const vars = j.variables.length
+      ? j.variables
+          .map(
+            (v) =>
+              `<div><b>{{${v.index}}}</b> <span class="muted">(${escapeHtml(
+                v.column
+              )})</span> = ${escapeHtml(v.value || "—")}</div>`
+          )
+          .join("")
+      : '<div class="muted">Sem variáveis mapeadas.</div>';
+    container.innerHTML = `
+      <div class="card" style="text-align:left;">
+        <div class="muted" style="font-size:12px; margin-bottom:8px;">PREVISÃO DO ENVIO</div>
+        <div><b>Pra:</b> ${escapeHtml(j.phone || "—")}</div>
+        <div><b>Template:</b> ${tmpl} <span class="muted">(${escapeHtml(j.language)})</span></div>
+        <div style="margin-top:8px;">${vars}</div>
+      </div>`;
+  } catch (e) {
+    container.innerHTML = `<div style="color:var(--error)">Erro: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+document
+  .getElementById("btn-preview-first")
+  ?.addEventListener("click", () => renderPreviewFirstInto("preview-first-container"));
+document
+  .getElementById("btn-preview-first-csv")
+  ?.addEventListener("click", () => renderPreviewFirstInto("preview-first-csv-container"));
 
 document.getElementById("btn-start").addEventListener("click", async () => {
   const phoneCol = document.getElementById("phone-col").value;
