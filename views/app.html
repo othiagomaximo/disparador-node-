@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=19" />
+  <link rel="stylesheet" href="/style.css?v=20" />
 </head>
 <body>
   <header>
@@ -79,6 +79,10 @@
         <h3>Pré-visualização dos dados</h3>
         <p class="muted">Confira se o CSV foi lido certo. A coluna do telefone já aparece com o <code>+55</code> aplicado.</p>
         <div class="table-wrap"><table id="preview-table"></table></div>
+        <div style="margin-top:16px;">
+          <button id="btn-preview-first-csv" class="ghost">👁 Pré-visualizar 1ª mensagem</button>
+          <div id="preview-first-csv-container" style="margin-top:12px;"></div>
+        </div>
       </div>
     </section>
 
@@ -108,10 +112,7 @@
       <div class="row" style="margin-bottom:12px;">
         <button id="btn-preview-first" class="ghost">👁 Pré-visualizar 1ª mensagem</button>
       </div>
-      <div id="preview-first" class="card hidden" style="margin-bottom:12px; text-align:left;">
-        <h4 style="margin:0 0 8px;">Previsão do envio</h4>
-        <div id="preview-first-body" style="font-size:14px; line-height:1.6;"></div>
-      </div>
+      <div id="preview-first-container" style="margin-bottom:12px;"></div>
       <div class="row">
         <button id="btn-start" class="primary">▶️ Iniciar disparo</button>
         <button id="btn-stop" class="danger">⏹ Parar</button>
@@ -144,6 +145,6 @@
     </section>
   </main>
 
-  <script src="/app.js?v=19"></script>
+  <script src="/app.js?v=20"></script>
 </body>
 </html>
