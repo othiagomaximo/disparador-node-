@@ -150,3 +150,87 @@ th { color: var(--muted); background: var(--panel); }
 .badge-delivered { background: rgba(37,211,102,.18); color: var(--accent); }
 .badge-read { background: rgba(30,163,86,.25); color: #2bd47a; }
 .badge-failed { background: rgba(248,81,73,.18); color: var(--error); }
+
+.status-pill.aborted { background: rgba(248,81,73,.15); color: var(--error); }
+
+/* ===== PARTE 1 — Contas WhatsApp ===== */
+.account-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 12px;
+}
+.account-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.account-swatch {
+  display: inline-block; width: 14px; height: 14px; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.2); flex: none;
+}
+.account-card label input[type="color"] { padding: 2px; height: 38px; cursor: pointer; }
+.acc-msg { margin-left: auto; }
+
+/* ===== PARTE 3 — Cards de disparo (multi-run) ===== */
+#runs-cards { display: flex; flex-direction: column; gap: 14px; }
+.run-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px;
+}
+.run-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.run-card-title { font-size: 14px; }
+.run-card-status { margin-left: auto; }
+.run-card-stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; align-items: center; }
+.run-card-stats .ok b { color: var(--accent); }
+.run-card-stats .err b { color: var(--error); }
+.run-card-stats .warn b { color: var(--warn); }
+.run-card .progress { margin: 10px 0; }
+.run-card .rc-bar { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+/* Log numerado e ROLÁVEL — guarda TODAS as linhas do run (PARTE 2.2) */
+.rc-log { max-height: 280px; }
+.rc-actions { margin-top: 10px; gap: 8px; }
+
+/* ===== Banner de pausados ===== */
+.paused-banner {
+  background: rgba(210,153,34,.12); border: 1px solid var(--warn);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+}
+.banner-run {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 10px; margin: 4px 4px 0 0; font-size: 12px; cursor: pointer;
+}
+.banner-run:hover { border-color: var(--warn); }
+
+/* ===== Relatório: apelido na linha ===== */
+.run-row .run-acc { font-size: 12px; }
+
+/* ===== Modal ===== */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 16px; z-index: 1000; overflow-y: auto;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; width: 100%; max-width: 640px;
+  position: relative;
+}
+.modal-close {
+  position: absolute; top: 12px; right: 12px;
+  background: transparent; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 10px; cursor: pointer;
+}
+.modal h3 { margin-top: 0; }
+
+/* Modal de pausa (4 opções) */
+.btn-dl {
+  display: inline-block; margin: 8px 0 14px; padding: 10px 14px;
+  background: var(--accent); color: #0e1116; border-radius: 8px;
+  font-weight: 600; text-decoration: none;
+}
+.btn-dl:hover { background: var(--accent-2); }
+.pause-options { display: flex; flex-direction: column; gap: 12px; margin: 8px 0; }
+.pause-options label { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-weight: normal; }
+.pause-options input[type="number"] { width: 90px; margin: 0 4px; }
+
+/* Modal de relatório */
+.report-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px; margin: 12px 0; font-size: 13px;
+}
+.report-grid > div { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }

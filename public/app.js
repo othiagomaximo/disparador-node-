@@ -8,14 +8,26 @@ navBtns.forEach((b) => {
     b.classList.add("active");
     document.querySelector(`.pane[data-pane="${b.dataset.tab}"]`).classList.add("active");
     if (b.dataset.tab === "relatorio") loadRuns();
+    if (b.dataset.tab === "disparo") {
+      loadAccountsIntoDropdown();
+      loadPausedBanner();
+    }
   });
 });
 
-// ===== Config =====
+// ===== Utils =====
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+}
+function escapeAttr(s) {
+  return String(s ?? "").replace(/"/g, "&quot;");
+}
+
+// ===== Config: Template =====
 async function loadConfig() {
   const r = await fetch("/api/config");
   const cfg = await r.json();
-  for (const k of ["access_token", "phone_number_id", "template_name", "language", "concurrency"]) {
+  for (const k of ["template_name", "language", "concurrency"]) {
     const el = document.getElementById(`cfg-${k}`);
     if (el && cfg[k] != null) el.value = cfg[k];
   }
@@ -23,8 +35,6 @@ async function loadConfig() {
 
 document.getElementById("save-config").addEventListener("click", async () => {
   const body = {
-    access_token: document.getElementById("cfg-access_token").value.trim(),
-    phone_number_id: document.getElementById("cfg-phone_number_id").value.trim(),
     template_name: document.getElementById("cfg-template_name").value.trim(),
     language: document.getElementById("cfg-language").value.trim(),
     concurrency: document.getElementById("cfg-concurrency").value,
@@ -43,6 +53,110 @@ document.getElementById("save-config").addEventListener("click", async () => {
     msg.style.color = "var(--error)";
   }
   setTimeout(() => (msg.textContent = ""), 3000);
+});
+
+// ===== Config: Contas WhatsApp (PARTE 1) =====
+let accountsCache = [];
+
+async function loadAccounts() {
+  const r = await fetch("/api/accounts");
+  accountsCache = await r.json();
+  renderAccounts();
+  loadAccountsIntoDropdown();
+}
+
+function accountCardHtml(a) {
+  const id = a.id || "";
+  const cor = a.cor || "#25D366";
+  return `
+  <div class="account-card" data-id="${id}">
+    <div class="account-head">
+      <span class="account-swatch" style="background:${escapeAttr(cor)}"></span>
+      <b>${a.id ? escapeHtml((a.icone || "") + " " + a.apelido) : "Nova conta"}</b>
+    </div>
+    <div class="row">
+      <label>Apelido * <input class="acc-apelido" maxlength="60" value="${escapeAttr(a.apelido || "")}" placeholder="ex: Lourrany Beleza" /></label>
+      <label style="max-width:110px;">Ícone <input class="acc-icone" maxlength="4" value="${escapeAttr(a.icone || "")}" placeholder="💄" /></label>
+      <label style="max-width:120px;">Cor <input class="acc-cor" type="color" value="${escapeAttr(cor)}" /></label>
+    </div>
+    <div class="row">
+      <label>Número (só exibição) <input class="acc-numero" value="${escapeAttr(a.numero || "")}" placeholder="+55 81 7902-1827" /></label>
+      <label>Phone Number ID <input class="acc-phone_number_id" value="${escapeAttr(a.phone_number_id || "")}" placeholder="15 dígitos" /></label>
+      <label>WABA ID <input class="acc-waba_id" value="${escapeAttr(a.waba_id || "")}" placeholder="opcional" /></label>
+    </div>
+    <label>Access Token ${a.has_token ? '<span class="muted">(salvo — deixe em branco pra manter)</span>' : ""}<textarea class="acc-token" rows="2" placeholder="${a.has_token ? "•••••••• preenchido" : "EAA..."}"></textarea></label>
+    <div class="row">
+      <button class="acc-save primary">💾 Salvar conta</button>
+      ${a.id ? '<button class="acc-delete danger">🗑 Remover</button>' : '<button class="acc-cancel ghost">Cancelar</button>'}
+      <span class="acc-msg hint"></span>
+    </div>
+  </div>`;
+}
+
+function renderAccounts() {
+  const list = document.getElementById("accounts-list");
+  if (!accountsCache.length) {
+    list.innerHTML = '<p class="muted">Nenhuma conta cadastrada ainda. Clique em "+ Adicionar conta WhatsApp".</p>';
+  } else {
+    list.innerHTML = accountsCache.map(accountCardHtml).join("");
+  }
+  bindAccountCards();
+}
+
+function bindAccountCards() {
+  document.querySelectorAll("#accounts-list .account-card").forEach(bindAccountCard);
+}
+
+// Liga listeners de UM card só — evita duplicar handlers nos cards existentes
+// quando "+ Adicionar conta" insere um novo (re-bindar todos duplicava o fetch).
+function bindAccountCard(card) {
+  const get = (cls) => card.querySelector("." + cls);
+    const msg = get("acc-msg");
+    get("acc-save")?.addEventListener("click", async () => {
+      const body = {
+        id: card.dataset.id || null,
+        apelido: get("acc-apelido").value.trim(),
+        icone: get("acc-icone").value.trim(),
+        cor: get("acc-cor").value,
+        numero: get("acc-numero").value.trim(),
+        phone_number_id: get("acc-phone_number_id").value.trim(),
+        waba_id: get("acc-waba_id").value.trim(),
+        token: get("acc-token").value.trim(),
+      };
+      if (!body.apelido) {
+        msg.textContent = "Apelido é obrigatório";
+        msg.style.color = "var(--error)";
+        return;
+      }
+      const r = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        msg.textContent = j.error || "Erro";
+        msg.style.color = "var(--error)";
+        return;
+      }
+      await loadAccounts();
+    });
+    get("acc-delete")?.addEventListener("click", async () => {
+      if (!confirm(`Remover a conta "${get("acc-apelido").value}"? Disparos pausados nessa conta não poderão ser retomados.`)) return;
+      const r = await fetch(`/api/accounts/${card.dataset.id}`, { method: "DELETE" });
+      if (r.ok) await loadAccounts();
+      else alert("Erro ao remover");
+    });
+    get("acc-cancel")?.addEventListener("click", () => renderAccounts());
+}
+
+document.getElementById("add-account").addEventListener("click", () => {
+  const list = document.getElementById("accounts-list");
+  if (list.querySelector('.account-card[data-id=""]')) return; // já tem uma nova aberta
+  if (accountsCache.length === 0) list.innerHTML = "";
+  list.insertAdjacentHTML("beforeend", accountCardHtml({}));
+  bindAccountCard(list.lastElementChild); // só o novo — não re-bindar os existentes
+  list.lastElementChild.querySelector(".acc-apelido")?.focus();
 });
 
 // ===== CSV =====
@@ -75,14 +189,10 @@ function renderCSV(j) {
   document.getElementById("csv-summary").textContent = `✅ ${j.filename} · ${j.total} linhas · colunas: ${j.headers.join(", ")}`;
 
   const phoneSel = document.getElementById("phone-col");
-  phoneSel.innerHTML = j.headers
-    .map((h) => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)
-    .join("");
-  // usa a coluna que o servidor já detectou/normalizou; senão tenta adivinhar
+  phoneSel.innerHTML = j.headers.map((h) => `<option value="${escapeAttr(h)}">${escapeHtml(h)}</option>`).join("");
   csvPhoneCol = j.phoneCol || j.headers.find((h) => /celular|telefone|phone|whatsapp/i.test(h)) || null;
   if (csvPhoneCol) phoneSel.value = csvPhoneCol;
 
-  // variáveis: começa com a primeira coluna não-telefone
   const varDiv = document.getElementById("var-cols");
   varDiv.innerHTML = "";
   const remaining = j.headers.filter((h) => h !== phoneSel.value);
@@ -91,8 +201,6 @@ function renderCSV(j) {
   renderPreview();
 }
 
-// Tabela neutra: só mostra os dados (telefone já vem normalizado do servidor).
-// Sem cores/normalização visual — o "negócio do 55" saiu da UI.
 function renderPreview() {
   const tbl = document.getElementById("preview-table");
   tbl.innerHTML =
@@ -103,19 +211,13 @@ function renderPreview() {
       .map(
         (row) =>
           "<tr>" +
-          csvHeaders
-            .map((h) => {
-              const val = row[h] ?? "";
-              return `<td title="${escapeAttr(val)}">${escapeHtml(val)}</td>`;
-            })
-            .join("") +
+          csvHeaders.map((h) => `<td title="${escapeAttr(row[h] ?? "")}">${escapeHtml(row[h] ?? "")}</td>`).join("") +
           "</tr>"
       )
       .join("") +
     "</tbody>";
 }
 
-// Re-normaliza no servidor quando o usuário troca a coluna de telefone.
 document.getElementById("phone-col").addEventListener("change", async (e) => {
   csvPhoneCol = e.target.value;
   const r = await fetch("/api/csv/normalize", {
@@ -137,8 +239,7 @@ function addVarRow(defaultCol) {
   div.innerHTML = `
     <b>{{${idx}}}</b>
     <select>${csvHeaders.map((h) => `<option value="${escapeAttr(h)}">${escapeHtml(h)}</option>`).join("")}</select>
-    <button class="remove">Remover</button>
-  `;
+    <button class="remove">Remover</button>`;
   if (defaultCol) div.querySelector("select").value = defaultCol;
   div.querySelector(".remove").addEventListener("click", () => {
     div.remove();
@@ -158,20 +259,12 @@ document.getElementById("add-var").addEventListener("click", (e) => {
   addVarRow(csvHeaders[0]);
 });
 
-// ===== Disparo =====
-let evtSource = null;
-
-// Pré-visualiza a 1ª mensagem renderizada (variáveis substituídas) antes de
-// disparar. Função compartilhada pelos botões das telas "2. CSV + Mapear" e
-// "3. Disparo" — lê o mapeamento atual (coluna do telefone + variáveis) do DOM
-// e renderiza o card no container informado. Reutiliza GET /api/disparo/preview-first.
+// ===== Preview 1ª mensagem =====
 async function renderPreviewFirstInto(containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
   const phoneCol = document.getElementById("phone-col").value;
-  const varCols = Array.from(
-    document.querySelectorAll("#var-cols .var-row select")
-  ).map((s) => s.value);
+  const varCols = Array.from(document.querySelectorAll("#var-cols .var-row select")).map((s) => s.value);
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
   container.innerHTML = '<div class="muted">Carregando preview...</div>';
   try {
@@ -179,9 +272,7 @@ async function renderPreviewFirstInto(containerId) {
     const r = await fetch(`/api/disparo/preview-first?${qs}`);
     const j = await r.json();
     if (!r.ok) {
-      container.innerHTML = `<div style="color:var(--error)">Erro: ${escapeHtml(
-        j.error || "HTTP " + r.status
-      )}</div>`;
+      container.innerHTML = `<div style="color:var(--error)">Erro: ${escapeHtml(j.error || "HTTP " + r.status)}</div>`;
       return;
     }
     const tmpl = j.template_name
@@ -189,12 +280,7 @@ async function renderPreviewFirstInto(containerId) {
       : '<span style="color:var(--error)">⚠️ template não configurado</span>';
     const vars = j.variables.length
       ? j.variables
-          .map(
-            (v) =>
-              `<div><b>{{${v.index}}}</b> <span class="muted">(${escapeHtml(
-                v.column
-              )})</span> = ${escapeHtml(v.value || "—")}</div>`
-          )
+          .map((v) => `<div><b>{{${v.index}}}</b> <span class="muted">(${escapeHtml(v.column)})</span> = ${escapeHtml(v.value || "—")}</div>`)
           .join("")
       : '<div class="muted">Sem variáveis mapeadas.</div>';
     container.innerHTML = `
@@ -208,81 +294,315 @@ async function renderPreviewFirstInto(containerId) {
     container.innerHTML = `<div style="color:var(--error)">Erro: ${escapeHtml(e.message)}</div>`;
   }
 }
+document.getElementById("btn-preview-first")?.addEventListener("click", () => renderPreviewFirstInto("preview-first-container"));
+document.getElementById("btn-preview-first-csv")?.addEventListener("click", () => renderPreviewFirstInto("preview-first-csv-container"));
 
-document
-  .getElementById("btn-preview-first")
-  ?.addEventListener("click", () => renderPreviewFirstInto("preview-first-container"));
-document
-  .getElementById("btn-preview-first-csv")
-  ?.addEventListener("click", () => renderPreviewFirstInto("preview-first-csv-container"));
+// ===== Disparo: dropdown de contas =====
+async function loadAccountsIntoDropdown() {
+  // Sempre busca fresco — assim editar/remover conta na aba 1 reflete no dropdown
+  // ao voltar pra aba 3 (cache podia ficar stale).
+  const r = await fetch("/api/accounts");
+  accountsCache = await r.json();
+  const sel = document.getElementById("disparo-account");
+  const prev = sel.value;
+  if (!accountsCache.length) {
+    sel.innerHTML = '<option value="">— cadastre uma conta na aba 1 —</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = accountsCache
+    .map((a) => `<option value="${a.id}">${escapeHtml((a.icone || "") + " " + a.apelido)}</option>`)
+    .join("");
+  if (prev && accountsCache.find((a) => String(a.id) === prev)) sel.value = prev;
+  // Se só 1 conta, pré-seleciona (já é o único option).
+}
+
+// ===== Disparo: cards multi-run + SSE =====
+const runCards = {}; // runId → { logEl, counter, autoScroll }
+let sse = null;
+
+function attachSSE() {
+  if (sse) return; // 1 conexão multiplexada serve todos os runs
+  sse = new EventSource("/api/disparo/stream");
+  sse.onmessage = (e) => {
+    try {
+      handleEvt(JSON.parse(e.data));
+    } catch {}
+  };
+  // Se a conexão cair (rede/restart), zera a ref e reabre — senão o guard
+  // `if (sse) return` travaria pra sempre numa EventSource morta.
+  sse.onerror = () => {
+    if (sse && sse.readyState === EventSource.CLOSED) {
+      sse = null;
+      setTimeout(attachSSE, 3000);
+    }
+  };
+}
+
+function statusPill(status) {
+  return `<span class="status-pill ${status}">${status}</span>`;
+}
+
+function ensureCard(s) {
+  let card = document.getElementById(`run-card-${s.runId}`);
+  document.getElementById("no-runs-msg").style.display = "none";
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "run-card";
+    card.id = `run-card-${s.runId}`;
+    card.innerHTML = `
+      <div class="run-card-head">
+        <span class="run-card-title">${escapeHtml((s.icone || "") + " " + (s.apelido || "Conta"))} · <b>run #${s.runId}</b></span>
+        <span class="run-card-status">${statusPill(s.status)}</span>
+      </div>
+      <div class="run-card-stats">
+        <span>📋 <b class="rc-total">${s.total}</b></span>
+        <span class="ok">✅ <b class="rc-env">${s.enviados}</b></span>
+        <span class="err">❌ <b class="rc-fal">${s.falhas}</b></span>
+        <span class="warn">⏭️ <b class="rc-pul">${s.pulados}</b></span>
+        ${s.pauseAt ? `<span class="muted">pausa em ${s.pauseAt}</span>` : ""}
+      </div>
+      <div class="progress"><div class="rc-bar"></div></div>
+      <pre class="log rc-log"></pre>
+      <div class="row rc-actions">
+        <button class="rc-pause ghost">⏸ Pausar</button>
+        <button class="rc-abort danger">⏹ Abortar</button>
+        <button class="rc-resume primary hidden">▶️ Continuar…</button>
+      </div>`;
+    document.getElementById("runs-cards").prepend(card);
+    const logEl = card.querySelector(".rc-log");
+    runCards[s.runId] = { logEl, counter: s.dispatched || 0, autoScroll: true };
+    logEl.addEventListener("scroll", () => {
+      const rc = runCards[s.runId];
+      rc.autoScroll = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+    });
+    card.querySelector(".rc-pause").addEventListener("click", () => pauseRunUi(s.runId));
+    card.querySelector(".rc-abort").addEventListener("click", () => abortRunUi(s.runId));
+    card.querySelector(".rc-resume").addEventListener("click", () => openPauseModal(s.runId));
+  }
+  updateCard(s);
+  return card;
+}
+
+function updateCard(s) {
+  const card = document.getElementById(`run-card-${s.runId}`);
+  if (!card) return;
+  card.querySelector(".rc-total").textContent = s.total;
+  card.querySelector(".rc-env").textContent = s.enviados;
+  card.querySelector(".rc-fal").textContent = s.falhas;
+  card.querySelector(".rc-pul").textContent = s.pulados;
+  card.querySelector(".run-card-status").innerHTML = statusPill(s.status);
+  const done = s.enviados + s.falhas + s.pulados;
+  card.querySelector(".rc-bar").style.width = `${s.total ? (done / s.total) * 100 : 0}%`;
+  const isPaused = s.status === "paused";
+  const isActive = s.status === "running";
+  card.querySelector(".rc-pause").classList.toggle("hidden", !isActive);
+  card.querySelector(".rc-resume").classList.toggle("hidden", !isPaused);
+  card.querySelector(".rc-abort").classList.toggle("hidden", s.status === "completed" || s.status === "aborted");
+}
+
+function appendRunLog(runId, line) {
+  const rc = runCards[runId];
+  if (!rc) return;
+  rc.logEl.textContent += line + "\n";
+  if (rc.autoScroll) rc.logEl.scrollTop = rc.logEl.scrollHeight;
+}
+
+function numberedLine(runId, icon, text) {
+  const rc = runCards[runId];
+  rc.counter = (rc.counter || 0) + 1;
+  const n = String(rc.counter).padStart(4, " ");
+  return `${n} - ${icon} ${text}`;
+}
+
+function handleEvt(evt) {
+  const rid = evt.runId;
+  if (evt.stats) {
+    ensureCard(evt.stats); // garante card + atualiza números
+  }
+  if (!rid || !runCards[rid]) return;
+  switch (evt.type) {
+    case "success":
+      appendRunLog(rid, numberedLine(rid, "✅", evt.phone));
+      break;
+    case "skip":
+      appendRunLog(rid, numberedLine(rid, "⏭️", `${evt.phone} (já enviado)`));
+      break;
+    case "failure":
+      appendRunLog(rid, numberedLine(rid, "❌", `${evt.phone} → ${evt.code}: ${evt.message}`));
+      break;
+    case "blocked":
+      appendRunLog(rid, `🚫 BLOQUEIO ${evt.code}: ${evt.message}`);
+      break;
+    case "resumed":
+      appendRunLog(rid, `▶️ retomado`);
+      break;
+    case "paused":
+      appendRunLog(rid, `⏸ PAUSADO (${evt.reason}) — ${evt.sent} de ${evt.total}, restam ${evt.remaining}`);
+      // Sempre atualiza o banner — se 2 runs pausam juntos, o modal abre pro 1º
+      // e o 2º fica visível/retomável no banner (não some).
+      loadPausedBanner();
+      if (modalIsClosed() && !pauseModalBusy) openPauseModal(rid);
+      break;
+    case "done":
+      appendRunLog(rid, `🏁 FINALIZADO (${evt.status})`);
+      break;
+  }
+}
 
 document.getElementById("btn-start").addEventListener("click", async () => {
+  const accountId = document.getElementById("disparo-account").value;
   const phoneCol = document.getElementById("phone-col").value;
   const varCols = Array.from(document.querySelectorAll("#var-cols .var-row select")).map((s) => s.value);
   const skipDuplicates = document.getElementById("chk-skip-duplicates").checked;
+  const pauseAtRaw = document.getElementById("disparo-pauseat").value.trim();
+  const pauseAt = pauseAtRaw ? parseInt(pauseAtRaw, 10) : null;
+  if (!accountId) return alert("Escolha a conta WhatsApp pra disparar (aba 1 pra cadastrar).");
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
-  const msg = skipDuplicates
-    ? "Iniciar disparo agora?\n\nDuplicados serão pulados."
-    : "Iniciar disparo agora?\n\n⚠️ ATENÇÃO: a opção de pular duplicados está DESMARCADA.\nNúmeros que já receberam vão receber DE NOVO.";
+  const acc = accountsCache.find((a) => String(a.id) === accountId);
+  let msg = `Iniciar disparo pela conta "${acc?.apelido || accountId}"?\n\n`;
+  msg += pauseAt ? `Vai pausar automaticamente após ${pauseAt} disparos.\n` : "";
+  msg += skipDuplicates ? "Duplicados serão pulados." : "⚠️ Pular duplicados DESMARCADO — quem já recebeu vai receber DE NOVO.";
   if (!confirm(msg)) return;
 
   const r = await fetch("/api/disparo/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phoneCol, varCols, skipDuplicates }),
+    body: JSON.stringify({ accountId, phoneCol, varCols, skipDuplicates, pauseAt }),
   });
   const j = await r.json();
-  if (!r.ok) {
-    alert(j.error || "Erro");
-    return;
-  }
-  document.getElementById("stat-total").textContent = j.total;
-  const dedupeLabel = j.skipDuplicates ? "dedupe ON" : "dedupe OFF";
-  appendLog(`Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados) · ${dedupeLabel}`);
+  if (!r.ok) return alert(j.error || "Erro");
+  ensureCard(j.snapshot);
+  appendRunLog(j.runId, `Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados) · ${j.skipDuplicates ? "dedupe ON" : "dedupe OFF"}${j.pauseAt ? ` · pausa em ${j.pauseAt}` : ""}`);
   attachSSE();
 });
 
-document.getElementById("btn-stop").addEventListener("click", async () => {
-  if (!confirm("Parar disparo?")) return;
-  await fetch("/api/disparo/stop", { method: "POST" });
+async function pauseRunUi(runId) {
+  await fetch(`/api/disparo/run/${runId}/pause`, { method: "POST" });
+  // o evento "paused" via SSE abre o modal
+}
+async function abortRunUi(runId) {
+  if (!confirm("Abortar o disparo? Os leads restantes serão descartados (você ainda pode baixar o CSV de pendentes pelo relatório).")) return;
+  await fetch(`/api/disparo/run/${runId}/abort`, { method: "POST" });
+}
+
+// ===== Modal genérico =====
+const backdrop = document.getElementById("modal-backdrop");
+const modalContent = document.getElementById("modal-content");
+function modalIsClosed() {
+  return backdrop.classList.contains("hidden");
+}
+function openModal(html) {
+  modalContent.innerHTML = html;
+  backdrop.classList.remove("hidden");
+}
+function closeModal() {
+  backdrop.classList.add("hidden");
+  modalContent.innerHTML = "";
+}
+document.getElementById("modal-close").addEventListener("click", closeModal);
+backdrop.addEventListener("click", (e) => {
+  if (e.target === backdrop) closeModal();
 });
 
-function attachSSE() {
-  if (evtSource) evtSource.close();
-  evtSource = new EventSource("/api/disparo/stream");
-  evtSource.onmessage = (e) => {
-    try {
-      const evt = JSON.parse(e.data);
-      handleEvt(evt);
-    } catch {}
-  };
-  evtSource.onerror = () => {};
-}
-
-function handleEvt(evt) {
-  const s = evt.stats;
-  if (s) {
-    document.getElementById("stat-total").textContent = s.total;
-    document.getElementById("stat-enviados").textContent = s.enviados;
-    document.getElementById("stat-falhas").textContent = s.falhas;
-    document.getElementById("stat-pulados").textContent = s.pulados;
-    const done = s.enviados + s.falhas + s.pulados;
-    document.getElementById("progress-bar").style.width = `${(done / s.total) * 100}%`;
-  }
-  if (evt.type === "success") appendLog(`✅ ${evt.phone}`);
-  if (evt.type === "skip") appendLog(`⏭️  ${evt.phone} (já enviado)`);
-  if (evt.type === "failure") appendLog(`❌ ${evt.phone}  → ${evt.code}: ${evt.message}`);
-  if (evt.type === "blocked") appendLog(`🚫 BLOQUEIO ${evt.code}: ${evt.message}`);
-  if (evt.type === "done") {
-    appendLog(`🏁 FINALIZADO (${evt.status})`);
-    if (evtSource) evtSource.close();
+// ===== Modal de PAUSA (4 opções) — PARTE 5 =====
+let pauseModalBusy = false; // guarda contra duplo-clique / múltiplos eventos abrindo o modal
+async function openPauseModal(runId) {
+  if (pauseModalBusy) return;
+  pauseModalBusy = true;
+  try {
+    await renderPauseModal(runId);
+  } catch (e) {
+    alert("Erro abrindo o painel de pausa: " + e.message);
+  } finally {
+    pauseModalBusy = false;
   }
 }
 
-function appendLog(line) {
-  const log = document.getElementById("log");
-  log.textContent += line + "\n";
-  log.scrollTop = log.scrollHeight;
+async function renderPauseModal(runId) {
+  const r = await fetch(`/api/disparo/run/${runId}`);
+  const { run } = await r.json();
+  const remaining = run.pending;
+  const reasonTxt = run.pauseReason === "manual" ? "(pausa manual)" : run.pauseReason === "limit-reached" ? "(limite atingido)" : run.pauseReason ? `(${escapeHtml(run.pauseReason)})` : "";
+  openModal(`
+    <div class="pause-modal">
+      <h3>⏸ Disparo pausado em ${run.dispatched} de ${run.total} <span class="muted">${reasonTxt}</span></h3>
+      <p>Restam <b>${remaining}</b> leads não disparados${run.apelido ? ` · conta ${escapeHtml((run.icone || "") + " " + run.apelido)}` : ""}.</p>
+      <a class="btn-dl" href="/api/disparo/run/${runId}/pending.csv">⬇ Baixar CSV dos NÃO disparados</a>
+      <div class="pause-options">
+        <label><input type="radio" name="pause-opt" value="all" checked /> Continuar disparando <b>TODOS</b> os ${remaining} restantes</label>
+        <label><input type="radio" name="pause-opt" value="n" /> Continuar disparando apenas <input id="pause-n" type="number" min="1" max="${remaining}" value="${Math.min(remaining, 500)}" style="width:90px;" /> restantes</label>
+        <label><input type="radio" name="pause-opt" value="abort" /> Encerrar disparo (descartar os ${remaining})</label>
+      </div>
+      <div class="row" style="margin-top:16px;">
+        <button id="pause-confirm" class="primary">Confirmar</button>
+        <button id="pause-later" class="ghost">Decidir depois</button>
+      </div>
+      <p class="hint">⚠️ Baixar o CSV não fecha esse modal nem muda o status. Em deploy o disparo pausado pode se perder — o CSV é a garantia real dos pendentes.</p>
+    </div>`);
+  document.getElementById("pause-confirm").addEventListener("click", async () => {
+    const opt = document.querySelector('input[name="pause-opt"]:checked').value;
+    if (opt === "abort") {
+      await fetch(`/api/disparo/run/${runId}/abort`, { method: "POST" });
+    } else if (opt === "n") {
+      const n = parseInt(document.getElementById("pause-n").value, 10);
+      if (!n || n < 1) return alert("Quantidade inválida");
+      await fetch(`/api/disparo/run/${runId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: n }),
+      });
+      attachSSE();
+    } else {
+      await fetch(`/api/disparo/run/${runId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: "all" }),
+      });
+      attachSSE();
+    }
+    closeModal();
+    loadPausedBanner();
+  });
+  document.getElementById("pause-later").addEventListener("click", () => {
+    closeModal();
+    loadPausedBanner();
+  });
+}
+
+// ===== Banner de disparos pausados (sobrevive reload/restart) =====
+async function loadPausedBanner() {
+  const banner = document.getElementById("paused-banner");
+  const r = await fetch("/api/disparo/my-paused-runs");
+  const paused = await r.json();
+  if (!paused.length) {
+    banner.classList.add("hidden");
+    banner.innerHTML = "";
+    return;
+  }
+  banner.classList.remove("hidden");
+  banner.innerHTML =
+    `<b>⏸ Você tem ${paused.length} disparo(s) pausado(s):</b> ` +
+    paused
+      .map(
+        (p) =>
+          `<button class="banner-run" data-id="${p.id}">${escapeHtml((p.acc_icone || "") + " " + (p.acc_apelido || "run"))} #${p.id} — ${p.dispatched}/${p.total} <span class="muted">retomar/ver</span></button>`
+      )
+      .join(" ");
+  banner.querySelectorAll(".banner-run").forEach((b) => {
+    b.addEventListener("click", () => openPauseModal(b.dataset.id));
+  });
+}
+
+// Reconecta cards de runs ativos (running/paused) ao (re)carregar a aba.
+async function loadActiveRuns() {
+  const r = await fetch("/api/disparo/active");
+  const j = await r.json();
+  if (j.runs.length) {
+    j.runs.forEach((s) => ensureCard(s));
+    attachSSE();
+  }
 }
 
 // ===== Relatórios =====
@@ -295,144 +615,93 @@ async function loadRuns() {
     return;
   }
   list.innerHTML = runs
-    .map(
-      (run) => `
+    .map((run) => {
+      const acc = run.acc_apelido ? `${escapeHtml(run.acc_icone || "")} ${escapeHtml(run.acc_apelido)}` : '<span class="muted">sem conta</span>';
+      return `
     <div class="run-row" data-id="${run.id}">
       <span><b>#${run.id}</b></span>
+      <span class="run-acc">${acc}</span>
       <span class="status-pill ${run.status}">${run.status}</span>
       <span class="muted">${run.started_at}</span>
       <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
         <span>✅ ${run.enviados} · ❌ ${run.falhas} · 📋 ${run.total}</span>
-        <button class="btn-row-download" data-id="${run.id}" title="Baixar CSV deste disparo" style="padding:4px 10px; font-size:12px;">⬇️ Baixar</button>
+        <button class="btn-row-download" data-id="${run.id}" title="Baixar relatório CSV" style="padding:4px 10px; font-size:12px;">⬇️ Baixar</button>
       </span>
-    </div>
-  `
-    )
+    </div>`;
+    })
     .join("");
   list.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", (e) => {
-      // Se clicou no botão de baixar, NÃO abrir o detalhe.
       if (e.target.closest(".btn-row-download")) return;
-      loadRunDetail(row.dataset.id);
+      openReportModal(row.dataset.id);
     });
   });
   list.querySelectorAll(".btn-row-download").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const id = btn.dataset.id;
-      // Cria <a download> invisível e clica — evita problemas de window.location
-      // com cookies/popups e força attachment.
-      const link = document.createElement("a");
-      link.href = `/api/runs/${id}/download`;
-      link.download = `relatorio_run_${id}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      downloadUrl(`/api/runs/${btn.dataset.id}/download`);
     });
   });
 }
 
-let currentRunResults = [];
-
-async function loadRunDetail(id) {
-  const r = await fetch(`/api/runs/${id}`);
-  const { run, results } = await r.json();
-  currentRunResults = results;
-  document.getElementById("run-detail").classList.remove("hidden");
-  document.getElementById("run-title").textContent = `Run #${run.id} — ${run.status} — ${run.enviados} enviados, ${run.falhas} falhas`;
-  document.getElementById("btn-download-csv").onclick = () => {
-    window.location = `/api/runs/${id}/download`;
-  };
-  const filterSel = document.getElementById("delivery-filter");
-  filterSel.value = "all";
-  filterSel.onchange = () => renderResults(currentRunResults, filterSel.value);
-  renderResults(results, "all");
+function downloadUrl(url) {
+  const link = document.createElement("a");
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
-// Renderiza badge colorida pro delivery_status real (vindo do webhook).
-// Volta texto cinza pro accepted (resposta da API) quando ainda não chegou webhook.
-function deliveryBadge(r) {
-  const ds = r.delivery_status;
-  if (ds === "read") return `<span class="badge badge-read">👁 read</span>`;
-  if (ds === "delivered") return `<span class="badge badge-delivered">✅ delivered</span>`;
-  if (ds === "sent") return `<span class="badge badge-sent">📨 sent</span>`;
-  if (ds === "failed") {
-    const err = r.delivery_error ? ` (${escapeHtml(r.delivery_error)})` : "";
-    return `<span class="badge badge-failed" title="${escapeAttr(r.delivery_error || "")}">❌ failed${err}</span>`;
-  }
-  // Sem update de webhook ainda: mostra "accepted" se a API aceitou
-  if (r.status === "ENVIADO") return `<span class="badge badge-accepted">⏳ accepted</span>`;
-  return `<span class="muted">—</span>`;
+// ===== Modal de RELATÓRIO (PARTE 4) =====
+async function openReportModal(id) {
+  const r = await fetch(`/api/disparo/run/${id}`);
+  const { run, counts, results } = await r.json();
+  const cor = run.cor || "#8b949e";
+  const acc = run.apelido ? `${escapeHtml(run.icone || "")} ${escapeHtml(run.apelido)}` : "(sem conta)";
+  const last = results.slice(-50).reverse();
+  const rowsHtml = last.length
+    ? last
+        .map((x) => `<tr><td>${escapeHtml(x.phone)}</td><td>${escapeHtml(x.status)}</td><td>${escapeHtml(x.delivery_status || "—")}</td><td title="${escapeAttr(x.motivo || "")}">${escapeHtml((x.motivo || "").slice(0, 50))}</td></tr>`)
+        .join("")
+    : '<tr><td colspan="4" class="muted">Sem resultados.</td></tr>';
+  openModal(`
+    <div class="report-modal">
+      <h3><span class="account-swatch" style="background:${escapeAttr(cor)}"></span> ${acc} · run #${run.id} ${statusPill(run.status)}</h3>
+      <div class="report-grid">
+        <div><span class="muted">WhatsApp</span><br>${escapeHtml(run.numero || "—")}</div>
+        <div><span class="muted">Phone Number ID</span><br>${escapeHtml(run.phone_number_id || "—")}</div>
+        <div><span class="muted">WABA ID</span><br>${escapeHtml(run.waba_id || "—")}</div>
+        <div><span class="muted">Lista</span><br>${escapeHtml(run.filename || "—")}</div>
+        <div><span class="muted">Início</span><br>${escapeHtml(run.started_at || "—")}</div>
+        <div><span class="muted">Fim</span><br>${escapeHtml(run.finished_at || "—")}</div>
+      </div>
+      <div class="run-card-stats" style="margin:12px 0;">
+        <span>📋 <b>${run.total}</b></span>
+        <span class="ok">✅ <b>${run.enviados}</b></span>
+        <span class="err">❌ <b>${run.falhas}</b></span>
+        <span class="warn">⏭️ <b>${run.pulados}</b></span>
+        <span class="muted">pendentes: <b>${counts.pending}</b></span>
+      </div>
+      <div class="row" style="flex-wrap:wrap; gap:8px;">
+        <button id="rep-dl-all" class="ghost">⬇️ Baixar CSV completo</button>
+        <button id="rep-dl-report" class="ghost">⬇️ Baixar relatório (entrega)</button>
+        ${counts.pending > 0 ? '<button id="rep-dl-pending" class="ghost">⬇️ Baixar CSV NÃO disparados</button>' : ""}
+        ${run.status === "paused" ? '<button id="rep-continue" class="primary">▶️ Continuar disparo</button>' : ""}
+      </div>
+      <h4 style="margin:16px 0 6px;">Últimos ${last.length} números</h4>
+      <div class="table-wrap" style="max-height:240px; overflow:auto;">
+        <table><thead><tr><th>Telefone</th><th>Status</th><th>Entrega</th><th>Motivo</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+      </div>
+    </div>`);
+  document.getElementById("rep-dl-all")?.addEventListener("click", () => downloadUrl(`/api/disparo/run/${id}/all.csv`));
+  document.getElementById("rep-dl-report")?.addEventListener("click", () => downloadUrl(`/api/runs/${id}/download`));
+  document.getElementById("rep-dl-pending")?.addEventListener("click", () => downloadUrl(`/api/disparo/run/${id}/pending.csv`));
+  document.getElementById("rep-continue")?.addEventListener("click", () => openPauseModal(id));
 }
-
-function passesFilter(r, filter) {
-  if (filter === "all") return true;
-  const ds = r.delivery_status;
-  if (filter === "delivered") return ds === "delivered" || ds === "read";
-  if (filter === "read") return ds === "read";
-  if (filter === "failed") return ds === "failed";
-  if (filter === "not_delivered") {
-    // Não entregues = qualquer um que foi ENVIADO mas não temos confirmação de delivered/read,
-    // ou que falhou pelo webhook.
-    if (r.status !== "ENVIADO" && r.status !== "PULADO" && !r.status?.startsWith?.("FALHA"))
-      return false;
-    if (ds === "failed") return true;
-    if (r.status === "ENVIADO" && ds !== "delivered" && ds !== "read") return true;
-    return false;
-  }
-  return true;
-}
-
-function renderResults(results, filter) {
-  const filtered = results.filter((r) => passesFilter(r, filter));
-  const tbl = document.getElementById("results-table");
-  if (!filtered.length) {
-    tbl.innerHTML =
-      "<thead><tr><th>Telefone</th><th>Status</th><th>Entrega</th><th>WAMID</th><th>Motivo</th></tr></thead>" +
-      `<tbody><tr><td colspan="5" class="muted" style="text-align:center; padding:16px;">Nenhum resultado pra esse filtro.</td></tr></tbody>`;
-    return;
-  }
-  tbl.innerHTML =
-    "<thead><tr><th>Telefone</th><th>Status</th><th>Entrega</th><th>WAMID</th><th>Motivo</th></tr></thead><tbody>" +
-    filtered
-      .map(
-        (r) => `
-      <tr>
-        <td>${escapeHtml(r.phone)}</td>
-        <td>${escapeHtml(r.status)}</td>
-        <td>${deliveryBadge(r)}</td>
-        <td title="${escapeAttr(r.wamid || "")}">${escapeHtml((r.wamid || "").slice(0, 30))}</td>
-        <td title="${escapeAttr(r.motivo || "")}">${escapeHtml((r.motivo || "").slice(0, 60))}</td>
-      </tr>
-    `
-      )
-      .join("") +
-    "</tbody>";
-}
-
-// ===== Utils =====
-function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
-}
-function escapeAttr(s) {
-  return String(s).replace(/"/g, "&quot;");
-}
-
-// ===== Limpar credenciais =====
-document.getElementById("btn-clear-creds").addEventListener("click", async () => {
-  if (!confirm("Apagar token, phone ID e template salvos? Você terá que digitar tudo de novo na próxima vez.")) return;
-  const r = await fetch("/api/config/clear", { method: "POST" });
-  if (r.ok) {
-    for (const k of ["access_token", "phone_number_id", "template_name", "language", "concurrency"]) {
-      const el = document.getElementById(`cfg-${k}`);
-      if (el) el.value = "";
-    }
-    alert("✅ Credenciais apagadas!");
-  } else {
-    alert("❌ Erro ao apagar");
-  }
-});
 
 // ===== Init =====
 loadConfig();
+loadAccounts();
 loadCurrentCSV();
+loadActiveRuns();
+loadPausedBanner();
