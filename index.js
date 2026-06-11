@@ -8,27 +8,51 @@ import { parse } from "csv-parse/sync";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 
 import {
   setConfig,
+  getConfig,
   getAllConfig,
   listRuns,
   getRun,
+  getRunWithAccount,
   getRunResults,
   updateDeliveryStatusByWamid,
+  listAccounts,
+  getAccount,
+  getAccountForUser,
+  createAccount,
+  updateAccount,
+  deleteAccount,
+  listPausedRuns,
+  getPendingRows,
+  getAllRunRows,
+  countRunRows,
+  backfillRunOwners,
 } from "./lib/db.js";
 import {
-  normalizePhone,
   normalizePhoneDetailed,
   forceAdd55,
   forceRemove55,
   cleanPhone,
 } from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
-import { startDisparo, stopCurrent, getCurrent } from "./lib/disparo-engine.js";
+import {
+  startDisparo,
+  getUserRuns,
+  getRunSnapshot,
+  pauseRun,
+  abortRun,
+  resumeRun,
+  BUS,
+  MAX_PARALLEL_RUNS_PER_USER,
+  isDryRun,
+} from "./lib/disparo-engine.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
 
 mkdirSync("./data", { recursive: true });
 mkdirSync("./uploads", { recursive: true });
@@ -65,19 +89,21 @@ app.use(
 
 const upload = multer({ dest: "./uploads/", limits: { fileSize: 30 * 1024 * 1024 } });
 
+const safeParse = (s, fb) => {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return fb;
+  }
+};
+
 // ---------- AUTH ----------
 app.get("/login", (req, res) => {
   if (req.session?.user) return res.redirect("/");
   res.sendFile(join(__dirname, "views", "login.html"));
 });
 
-// Lê todos os usuários configurados em env vars.
-// Aceita SENHA EM TEXTO PURO via LOGIN_PASSWORD (mais simples, evita problema com $)
-// OU hash bcrypt via LOGIN_PASSWORD_HASH (mais seguro).
-// Múltiplos usuários: LOGIN_USER_2 / LOGIN_PASSWORD_2, etc até _10
-// Clientes fixos no código (repo privado) — funcionam sem precisar de env var.
-// Os usuários via env (LOGIN_USER*, ex.: m4ximo963, Pedro Ivo no Hostinger)
-// continuam funcionando normalmente e têm prioridade em caso de mesmo nome.
+// Lê todos os usuários configurados em env vars + clientes fixos no código.
 const HARDCODED_CLIENTS = [
   { user: "cliente1", secret: "Cliente1@2026", isHash: false },
   { user: "cliente2", secret: "Cliente2@2026", isHash: false },
@@ -101,7 +127,6 @@ function getConfiguredUsers() {
   for (let i = 2; i <= 10; i++) {
     pushIf(`LOGIN_USER_${i}`, `LOGIN_PASSWORD_${i}`, `LOGIN_PASSWORD_HASH_${i}`);
   }
-  // Adiciona os clientes hardcoded que ainda não existam via env var.
   for (const c of HARDCODED_CLIENTS) {
     if (!users.find((u) => u.user === c.user)) users.push(c);
   }
@@ -131,8 +156,6 @@ app.post("/logout", (req, res) => {
 });
 
 // ---------- WEBHOOK META (público — autenticado por verify token) ----------
-// Verificação: Meta chama GET com hub.mode/hub.verify_token/hub.challenge.
-// A gente devolve o challenge em texto puro se o token bater.
 app.get("/api/webhook", (req, res) => {
   const expected = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query["hub.mode"];
@@ -183,55 +206,112 @@ app.post("/api/webhook", (req, res) => {
 app.use(requireAuth);
 
 app.get("/", (req, res) => {
-  // Idem: HTML sempre revalidado, pra nunca casar HTML novo com app.js velho.
   res.setHeader("Cache-Control", "no-cache");
   res.sendFile(join(__dirname, "views", "app.html"));
 });
 
-// ---------- API: Config ----------
+// ---------- API: Config (template/idioma/threads — credenciais agora em contas) ----------
 app.get("/api/config", (req, res) => {
-  res.json(getAllConfig());
+  const cfg = getAllConfig();
+  // Só expõe as chaves de envio (não credenciais legadas/markers internos).
+  res.json({
+    template_name: cfg.template_name || "",
+    language: cfg.language || "pt_BR",
+    concurrency: cfg.concurrency || "10",
+  });
 });
 
 app.post("/api/config", (req, res) => {
-  const allowed = [
-    "access_token",
-    "phone_number_id",
-    "template_name",
-    "language",
-    "concurrency",
-  ];
+  const allowed = ["template_name", "language", "concurrency"];
   for (const k of allowed) {
     if (k in req.body) setConfig(k, String(req.body[k] ?? ""));
   }
-  res.json({ ok: true, config: getAllConfig() });
-});
-
-// Limpa todas as credenciais salvas (token, phone, template)
-app.post("/api/config/clear", (req, res) => {
-  const keys = ["access_token", "phone_number_id", "template_name", "language", "concurrency"];
-  for (const k of keys) setConfig(k, "");
   res.json({ ok: true });
 });
 
-// ---------- API: CSV upload + parse ----------
-let CSV_BUFFER = null; // memória, 1 arquivo por vez
+// ---------- PARTE 1: API de contas WhatsApp (por usuário) ----------
+// Migração: user sem contas + config legada (token+phone globais) ganha uma
+// "Conta principal" automaticamente, pra ninguém logar e ver a config sumida.
+function ensureAccountsForUser(user) {
+  const existing = listAccounts(user);
+  if (existing.length) return existing;
+  if (getConfig(`acct_migrated_${user}`)) return existing; // já migrou antes
+  const cfg = getAllConfig();
+  if (cfg.access_token && cfg.phone_number_id) {
+    createAccount(user, {
+      apelido: "Conta principal",
+      icone: "📱",
+      cor: "#25D366",
+      numero: cfg.numero || "",
+      phone_number_id: cfg.phone_number_id,
+      waba_id: cfg.waba_id || "",
+      token: cfg.access_token,
+    });
+    setConfig(`acct_migrated_${user}`, "1");
+    return listAccounts(user);
+  }
+  return existing;
+}
 
-// Tenta adivinhar a coluna do telefone pelo nome do cabeçalho.
+function validateAccount(body) {
+  const apelido = String(body?.apelido ?? "").trim();
+  if (!apelido) return { error: "Apelido é obrigatório" };
+  if (apelido.length > 60) return { error: "Apelido deve ter no máximo 60 caracteres" };
+  return {
+    data: {
+      apelido,
+      icone: String(body.icone ?? "").replace(/[<>"&]/g, "").trim().slice(0, 8) || null,
+      cor: String(body.cor ?? "").replace(/[^#\w(),.% ]/g, "").trim().slice(0, 20) || null,
+      numero: String(body.numero ?? "").trim().slice(0, 40) || null,
+      phone_number_id: String(body.phone_number_id ?? "").trim().slice(0, 60) || null,
+      waba_id: String(body.waba_id ?? "").trim().slice(0, 60) || null,
+      token: String(body.token ?? "").trim() || null,
+    },
+  };
+}
+
+app.get("/api/accounts", (req, res) => {
+  // NUNCA devolve o token Meta pro cliente — só sinaliza se já está preenchido
+  // (has_token). Editar a conta sem redigitar o token preserva (COALESCE no DB).
+  const accounts = ensureAccountsForUser(req.session.user).map(({ token, ...a }) => ({
+    ...a,
+    has_token: !!token,
+  }));
+  res.json(accounts);
+});
+
+app.post("/api/accounts", (req, res) => {
+  const user = req.session.user;
+  const v = validateAccount(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  const id = req.body?.id ? Number(req.body.id) : null;
+  if (id) {
+    const owned = getAccountForUser(id, user);
+    if (!owned) return res.status(404).json({ error: "Conta não encontrada" });
+    return res.json({ ok: true, account: updateAccount(id, user, v.data) });
+  }
+  res.json({ ok: true, account: createAccount(user, v.data) });
+});
+
+app.delete("/api/accounts/:id", (req, res) => {
+  const ok = deleteAccount(Number(req.params.id), req.session.user);
+  if (!ok) return res.status(404).json({ error: "Conta não encontrada" });
+  res.json({ ok: true });
+});
+
+// ---------- API: CSV upload + parse (PARTE 3.6: buffer POR USUÁRIO) ----------
+const CSV_BUFFERS = new Map(); // key: userId → buffer (1 por user/sessão)
+const getBuf = (req) => CSV_BUFFERS.get(req.session.user) || null;
+
 function guessPhoneCol(headers) {
   return headers.find((h) => /celular|telefone|phone|whatsapp|fone|tel\b/i.test(h)) || null;
 }
 
-// (Re)aplica a auto-normalização (normalizePhoneDetailed) na coluna de telefone
-// de TODAS as linhas do buffer, guardando metadados em row.__norm e preservando
-// o valor original cru em row.__phoneOriginal (capturado só na 1ª vez).
-function applyNormalization(phoneCol) {
-  if (!CSV_BUFFER) return;
-  // RESTAURA TODAS as colunas do snapshot original antes de qualquer
-  // coisa. Isso desfaz qualquer mutação de chamadas anteriores.
-  CSV_BUFFER.rows = CSV_BUFFER.rowsOriginal.map((r) => ({ ...r }));
-  CSV_BUFFER.phoneCol = phoneCol;
-  for (const row of CSV_BUFFER.rows) {
+function applyNormalization(buf, phoneCol) {
+  if (!buf) return;
+  buf.rows = buf.rowsOriginal.map((r) => ({ ...r }));
+  buf.phoneCol = phoneCol;
+  for (const row of buf.rows) {
     const original = row[phoneCol] ?? "";
     const d = normalizePhoneDetailed(original);
     row.__phoneOriginal = original;
@@ -240,15 +320,11 @@ function applyNormalization(phoneCol) {
   }
 }
 
-// Aplica ajuste manual em massa (forceAdd55 / forceRemove55) na coluna ativa.
-function applyBulk(phoneCol, action) {
-  if (!CSV_BUFFER) return;
-  // Restaura snapshot antes. Como o usuario pode ter feito
-  // applyNormalization e DEPOIS o bulk, restauramos do original
-  // direto e aplicamos so o bulk.
-  CSV_BUFFER.rows = CSV_BUFFER.rowsOriginal.map((r) => ({ ...r }));
-  CSV_BUFFER.phoneCol = phoneCol;
-  for (const row of CSV_BUFFER.rows) {
+function applyBulk(buf, phoneCol, action) {
+  if (!buf) return;
+  buf.rows = buf.rowsOriginal.map((r) => ({ ...r }));
+  buf.phoneCol = phoneCol;
+  for (const row of buf.rows) {
     const original = row[phoneCol] ?? "";
     const after = action === "add55" ? forceAdd55(original) : forceRemove55(original);
     row.__phoneOriginal = original;
@@ -261,9 +337,8 @@ function applyBulk(phoneCol, action) {
   }
 }
 
-// Monta stats agregados + as primeiras N linhas pra preview.
-function buildNormPreview(limit = 50) {
-  const rows = CSV_BUFFER?.rows || [];
+function buildNormPreview(buf, limit = 50) {
+  const rows = buf?.rows || [];
   const stats = { total: rows.length, added55: 0, already55: 0, invalid: 0, empty: 0 };
   for (const row of rows) {
     const r = row.__norm?.reason;
@@ -273,8 +348,8 @@ function buildNormPreview(limit = 50) {
     else if (r === "empty") stats.empty++;
   }
   return {
-    phoneCol: CSV_BUFFER?.phoneCol || null,
-    headers: CSV_BUFFER?.headers || [],
+    phoneCol: buf?.phoneCol || null,
+    headers: buf?.headers || [],
     stats,
     total: rows.length,
     preview: rows.slice(0, limit),
@@ -286,7 +361,6 @@ app.post("/api/csv/upload", upload.single("file"), (req, res) => {
   try {
     const raw = require("node:fs").readFileSync(req.file.path, "utf-8");
     require("node:fs").unlinkSync(req.file.path);
-    // detecta delimitador (vírgula ou ponto-e-vírgula)
     const firstLine = raw.split(/\r?\n/)[0] || "";
     const delim = (firstLine.match(/;/g)?.length || 0) >= (firstLine.match(/,/g)?.length || 0) ? ";" : ",";
     const rows = parse(raw, {
@@ -298,26 +372,21 @@ app.post("/api/csv/upload", upload.single("file"), (req, res) => {
     });
     if (!rows.length) return res.status(400).json({ error: "CSV vazio" });
     const headers = Object.keys(rows[0]);
-    // Clona profundamente as linhas pra preservar valores originais.
-    // applyNormalization vai modificar CSV_BUFFER.rows mas rowsOriginal
-    // mantém intocado.
-    CSV_BUFFER = {
+    const buf = {
       filename: req.file.originalname,
       headers,
+      delimiter: delim,
       rows: rows.map((r) => ({ ...r })),
       rowsOriginal: rows.map((r) => ({ ...r })),
       phoneCol: null,
     };
-    // Auto-normaliza já no upload, usando a coluna de telefone detectada.
-    // Se nenhuma coluna casar com o regex, cai pra primeira coluna — assim
-    // CSV_BUFFER.phoneCol NUNCA fica null e as rotas de normalize/disparo
-    // não quebram com "Coluna não definida" caso o user não troque o dropdown.
+    CSV_BUFFERS.set(req.session.user, buf);
     const phoneCol = guessPhoneCol(headers) || headers[0] || null;
-    if (phoneCol) applyNormalization(phoneCol);
-    const np = buildNormPreview();
+    if (phoneCol) applyNormalization(buf, phoneCol);
+    const np = buildNormPreview(buf);
     res.json({
       ok: true,
-      filename: CSV_BUFFER.filename,
+      filename: buf.filename,
       headers,
       phoneCol: np.phoneCol,
       stats: np.stats,
@@ -330,76 +399,59 @@ app.post("/api/csv/upload", upload.single("file"), (req, res) => {
   }
 });
 
-// (Re)normaliza quando o usuário troca a coluna de telefone no mapeamento.
 app.post("/api/csv/normalize", (req, res) => {
-  if (!CSV_BUFFER) return res.status(400).json({ error: "Suba o CSV primeiro" });
+  const buf = getBuf(req);
+  if (!buf) return res.status(400).json({ error: "Suba o CSV primeiro" });
   const { phoneCol } = req.body || {};
-  if (!phoneCol || !CSV_BUFFER.headers.includes(phoneCol)) {
+  if (!phoneCol || !buf.headers.includes(phoneCol)) {
     return res.status(400).json({ error: "Coluna de telefone inválida" });
   }
-  // applyNormalization restaura do snapshot rowsOriginal antes de normalizar,
-  // então trocar a coluna não corrompe as demais (cada chamada parte do cru).
-  applyNormalization(phoneCol);
-  res.json({ ok: true, ...buildNormPreview() });
+  applyNormalization(buf, phoneCol);
+  res.json({ ok: true, ...buildNormPreview(buf) });
 });
 
-// Ajuste manual em massa: { action: 'add55' | 'remove55' }
 app.post("/api/normalize-bulk", (req, res) => {
-  if (!CSV_BUFFER) return res.status(400).json({ error: "Suba o CSV primeiro" });
+  const buf = getBuf(req);
+  if (!buf) return res.status(400).json({ error: "Suba o CSV primeiro" });
   const { action } = req.body || {};
   if (action !== "add55" && action !== "remove55") {
     return res.status(400).json({ error: "action deve ser 'add55' ou 'remove55'" });
   }
-  const phoneCol = CSV_BUFFER.phoneCol || guessPhoneCol(CSV_BUFFER.headers);
+  const phoneCol = buf.phoneCol || guessPhoneCol(buf.headers);
   if (!phoneCol) return res.status(400).json({ error: "Coluna de telefone não definida" });
-  applyBulk(phoneCol, action);
-  res.json({ ok: true, ...buildNormPreview() });
+  applyBulk(buf, phoneCol, action);
+  res.json({ ok: true, ...buildNormPreview(buf) });
 });
 
-// Trick pra usar require em ES modules (só pra fs sync acima)
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-
 app.get("/api/csv/current", (req, res) => {
-  if (!CSV_BUFFER) return res.json({ loaded: false });
-  const np = buildNormPreview();
+  const buf = getBuf(req);
+  if (!buf) return res.json({ loaded: false });
+  const np = buildNormPreview(buf);
   res.json({
     loaded: true,
-    filename: CSV_BUFFER.filename,
-    headers: CSV_BUFFER.headers,
+    filename: buf.filename,
+    headers: buf.headers,
     phoneCol: np.phoneCol,
     stats: np.stats,
     preview: np.preview,
-    total: CSV_BUFFER.rows.length,
+    total: buf.rows.length,
   });
 });
 
 // ---------- API: Disparo ----------
-let currentEvents = null;
-
-// Retorna a PRIMEIRA mensagem renderizada (variáveis substituídas) pro user
-// confirmar antes de disparar. Aceita phoneCol e varCols (CSV de colunas) via
-// query string — espelha o mapeamento atual da tela de disparo.
 app.get("/api/disparo/preview-first", (req, res) => {
-  if (!CSV_BUFFER || !CSV_BUFFER.rows.length) {
+  const buf = getBuf(req);
+  if (!buf || !buf.rows.length) {
     return res.status(400).json({ error: "Suba CSV primeiro" });
   }
   const cfg = getAllConfig();
-  const phoneCol =
-    req.query.phoneCol || CSV_BUFFER.phoneCol || guessPhoneCol(CSV_BUFFER.headers);
+  const phoneCol = req.query.phoneCol || buf.phoneCol || guessPhoneCol(buf.headers);
   const varCols = req.query.varCols
-    ? String(req.query.varCols)
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
+    ? String(req.query.varCols).split(",").map((s) => s.trim()).filter(Boolean)
     : [];
-  const row = CSV_BUFFER.rows[0];
+  const row = buf.rows[0];
   const phone = phoneCol ? cleanPhone(row[phoneCol]) : "";
-  const variables = varCols.map((c, i) => ({
-    index: i + 1,
-    column: c,
-    value: row[c] ?? "",
-  }));
+  const variables = varCols.map((c, i) => ({ index: i + 1, column: c, value: row[c] ?? "" }));
   res.json({
     phone,
     template_name: cfg.template_name || null,
@@ -408,107 +460,245 @@ app.get("/api/disparo/preview-first", (req, res) => {
   });
 });
 
-app.post("/api/disparo/start", async (req, res) => {
-  if (!CSV_BUFFER) return res.status(400).json({ error: "Suba o CSV primeiro" });
+// Inicia um disparo. Faz SNAPSHOT do CSV do user (PARTE 3.6) — depois disso o
+// run vive independente do CSV_BUFFER. Exige accountId (PARTE 1) e aceita
+// pauseAt opcional (PARTE 5).
+app.post("/api/disparo/start", (req, res) => {
+  const user = req.session.user;
+  const buf = getBuf(req);
+  if (!buf) return res.status(400).json({ error: "Suba o CSV primeiro" });
   const cfg = getAllConfig();
-  if (!cfg.access_token || !cfg.phone_number_id || !cfg.template_name) {
-    return res.status(400).json({ error: "Configure token, phone ID e template antes" });
+  if (!cfg.template_name) return res.status(400).json({ error: "Configure o nome do template (aba 1)" });
+
+  const { phoneCol, varCols, skipDuplicates, accountId, pauseAt } = req.body || {};
+  if (!accountId) return res.status(400).json({ error: "Escolha a conta WhatsApp pra disparar" });
+  const account = getAccountForUser(Number(accountId), user);
+  if (!account) return res.status(400).json({ error: "Conta inválida" });
+  if (!account.token || !account.phone_number_id) {
+    return res.status(400).json({ error: `A conta "${account.apelido}" está sem token ou Phone Number ID` });
   }
-  const { phoneCol, varCols, skipDuplicates } = req.body || {};
   if (!phoneCol) return res.status(400).json({ error: "Mapeie a coluna do telefone" });
-  // default true se não vier (ou vier null/undefined)
   const skip = skipDuplicates === undefined || skipDuplicates === null ? true : !!skipDuplicates;
 
-  // Garante que a normalização está sincronizada com a coluna escolhida no disparo.
-  // (se o usuário mapeou uma coluna diferente da auto-detectada e não re-normalizou)
-  if (CSV_BUFFER.phoneCol !== phoneCol) applyNormalization(phoneCol);
+  if (buf.phoneCol !== phoneCol) applyNormalization(buf, phoneCol);
 
-  // Monta leads. Usa o valor JÁ normalizado/ajustado no buffer (respeita os botões
-  // "+55"/"-55"); só descarta números vazios ou curtos demais.
   const leads = [];
   let invalidos = 0;
-  for (const row of CSV_BUFFER.rows) {
+  for (let i = 0; i < buf.rows.length; i++) {
+    const row = buf.rows[i];
     const phone = cleanPhone(row[phoneCol]);
     if (!phone || phone.length < 10) {
       invalidos++;
       continue;
     }
     const parametros = (varCols || []).map((c) => row[c] ?? "");
-    leads.push({ phone, parametros });
+    leads.push({ phone, parametros, rowOriginal: buf.rowsOriginal[i] || {} });
   }
   if (!leads.length) return res.status(400).json({ error: "Nenhum telefone válido no CSV" });
 
+  const paNum = parseInt(pauseAt, 10);
+  const pauseAtVal = Number.isFinite(paNum) && paNum > 0 ? paNum : null;
+
   try {
-    const { runId, events } = startDisparo(leads, {
-      accessToken: cfg.access_token,
-      phoneNumberId: cfg.phone_number_id,
+    const { runId, snapshot } = startDisparo(leads, {
+      userId: user,
+      account: {
+        id: account.id,
+        apelido: account.apelido,
+        icone: account.icone,
+        cor: account.cor,
+        numero: account.numero,
+        phone_number_id: account.phone_number_id,
+        waba_id: account.waba_id,
+        token: account.token,
+      },
       templateName: cfg.template_name,
       language: cfg.language || "pt_BR",
       concurrency: Number(cfg.concurrency) || 10,
       skipDuplicates: skip,
+      pauseAt: pauseAtVal,
+      csvFilename: buf.filename,
+      csvHeaders: buf.headers,
+      csvDelimiter: buf.delimiter || ",",
+      varCols: varCols || [],
     });
-    currentEvents = events;
-    res.json({ ok: true, runId, total: leads.length, invalidos, skipDuplicates: skip });
+    res.json({ ok: true, runId, total: leads.length, invalidos, skipDuplicates: skip, pauseAt: pauseAtVal, snapshot });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
 });
 
-app.post("/api/disparo/stop", (req, res) => {
-  stopCurrent();
-  res.json({ ok: true });
+// Runs ativos (em memória) deste user — pra renderizar os cards no load.
+app.get("/api/disparo/active", (req, res) => {
+  res.json({ runs: getUserRuns(req.session.user), maxParallel: MAX_PARALLEL_RUNS_PER_USER, dryRun: isDryRun() });
 });
 
-app.get("/api/disparo/status", (req, res) => {
-  res.json(getCurrent());
+// Runs pausados (do banco) — pra banner "você tem disparos pausados".
+app.get("/api/disparo/my-paused-runs", (req, res) => {
+  res.json(listPausedRuns(req.session.user));
 });
 
+// SSE multiplexado: 1 conexão, eventos de todos os runs do user (cada um com runId).
 app.get("/api/disparo/stream", (req, res) => {
+  const user = req.session.user;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  const sendSnapshot = () => {
-    const cur = getCurrent();
-    if (cur) res.write(`data: ${JSON.stringify({ type: "status", stats: cur })}\n\n`);
-  };
-  sendSnapshot();
-
-  const onEvent = (e) => {
-    res.write(`data: ${JSON.stringify(e)}\n\n`);
-    if (e.type === "done") {
-      res.end();
-    }
-  };
-
-  if (currentEvents) {
-    currentEvents.on("event", onEvent);
+  for (const s of getUserRuns(user)) {
+    res.write(`data: ${JSON.stringify({ type: "status", runId: s.runId, stats: s })}\n\n`);
   }
 
-  const ping = setInterval(() => res.write(`: ping\n\n`), 15000);
+  const onEvent = (e) => {
+    if (e.userId === user) res.write(`data: ${JSON.stringify(e)}\n\n`);
+  };
+  BUS.on("event", onEvent);
 
+  const ping = setInterval(() => res.write(`: ping\n\n`), 15000);
   req.on("close", () => {
     clearInterval(ping);
-    if (currentEvents) currentEvents.off("event", onEvent);
+    BUS.off("event", onEvent);
   });
 });
 
+// Detalhe de um run (modal de relatório / pausa) — inclui apelido/icone/cor +
+// dados técnicos da conta + stats + últimos resultados.
+app.get("/api/disparo/run/:id", (req, res) => {
+  const user = req.session.user;
+  const run = getRunWithAccount(Number(req.params.id));
+  if (!run || run.user_id !== user) return res.status(404).json({ error: "Run não encontrado" });
+  const counts = countRunRows(run.id);
+  const results = getRunResults(run.id);
+  const live = getRunSnapshot(user, run.id);
+  res.json({
+    run: {
+      id: run.id,
+      status: live?.status || run.status,
+      started_at: run.started_at,
+      finished_at: run.finished_at,
+      total: run.total,
+      enviados: run.enviados,
+      falhas: run.falhas,
+      pulados: run.pulados,
+      dispatched: run.dispatched,
+      pending: counts.pending,
+      pauseAt: run.pause_at,
+      pauseReason: run.pause_reason,
+      filename: run.csv_filename,
+      motivo: run.motivo,
+      apelido: run.acc_apelido,
+      icone: run.acc_icone,
+      cor: run.acc_cor,
+      numero: run.acc_numero,
+      phone_number_id: run.acc_phone_number_id,
+      waba_id: run.acc_waba_id,
+    },
+    counts,
+    results,
+  });
+});
+
+app.post("/api/disparo/run/:id/pause", (req, res) => {
+  try {
+    res.json({ ok: true, snapshot: pauseRun(req.session.user, Number(req.params.id)) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/api/disparo/run/:id/abort", (req, res) => {
+  try {
+    res.json({ ok: true, ...abortRun(req.session.user, Number(req.params.id)) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/api/disparo/run/:id/resume", (req, res) => {
+  try {
+    const { count } = req.body || {};
+    res.json({ ok: true, snapshot: resumeRun(req.session.user, Number(req.params.id), count) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// CSV dos NÃO disparados — header/colunas/separador idênticos ao importado,
+// valores ORIGINAIS, filtrado pras linhas ainda pendentes. Pra reimportar.
+app.get("/api/disparo/run/:id/pending.csv", (req, res) => {
+  const user = req.session.user;
+  const run = getRun(Number(req.params.id));
+  if (!run || run.user_id !== user) return res.status(404).send("Not found");
+  const headers = safeParse(run.csv_headers, []);
+  const delim = run.csv_delimiter || ",";
+  const rows = getPendingRows(run.id).map((r) => safeParse(r.row_json, {}));
+  const csv = buildDelimitedCsv(headers, rows, delim);
+  const base = safeFilename(run.csv_filename, run.id);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${base}_pendentes.csv"`);
+  res.send("\uFEFF" + csv);
+});
+
+// CSV completo (todas as linhas originais do snapshot do run), mesmo formato.
+app.get("/api/disparo/run/:id/all.csv", (req, res) => {
+  const user = req.session.user;
+  const run = getRun(Number(req.params.id));
+  if (!run || run.user_id !== user) return res.status(404).send("Not found");
+  const headers = safeParse(run.csv_headers, []);
+  const delim = run.csv_delimiter || ",";
+  const rows = getAllRunRows(run.id).map((r) => safeParse(r.row_json, {}));
+  const csv = buildDelimitedCsv(headers, rows, delim);
+  const base = safeFilename(run.csv_filename, run.id);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${base}_completo.csv"`);
+  res.send("\uFEFF" + csv);
+});
+
+// Base de nome de arquivo seguro pro header Content-Disposition. O nome vem do
+// upload (req.file.originalname, NÃO sanitizado por multer) — remove aspas,
+// ponto-e-vírgula e quebras pra não injetar parâmetros no header.
+function safeFilename(rawName, runId) {
+  const base = String(rawName || `run_${runId}`)
+    .replace(/\.csv$/i, "")
+    .replace(/[^\w\-. ]+/g, "_")
+    .slice(0, 100)
+    .trim();
+  return base || `run_${runId}`;
+}
+
+function buildDelimitedCsv(headers, rowsObjs, delimiter) {
+  const delim = delimiter || ",";
+  const esc = (v) => {
+    const s = String(v ?? "");
+    if (s.includes(delim) || s.includes('"') || /[\r\n]/.test(s)) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  };
+  const lines = [headers.map(esc).join(delim)];
+  for (const row of rowsObjs) lines.push(headers.map((h) => esc(row[h])).join(delim));
+  return lines.join("\r\n");
+}
+
 // ---------- API: Relatórios ----------
 app.get("/api/runs", (req, res) => {
-  res.json(listRuns(50));
+  res.json(listRuns(50, req.session.user));
 });
 
 app.get("/api/runs/:id", (req, res) => {
-  const run = getRun(Number(req.params.id));
-  if (!run) return res.status(404).json({ error: "Run não encontrada" });
+  const run = getRunWithAccount(Number(req.params.id));
+  if (!run || run.user_id !== req.session.user) {
+    return res.status(404).json({ error: "Run não encontrada" });
+  }
   const results = getRunResults(run.id);
   res.json({ run, results });
 });
 
+// CSV no formato de RELATÓRIO (telefone;status;wamid;...) — log de entrega.
 app.get("/api/runs/:id/download", (req, res) => {
   const run = getRun(Number(req.params.id));
-  if (!run) return res.status(404).send("Not found");
+  if (!run || run.user_id !== req.session.user) return res.status(404).send("Not found");
   const results = getRunResults(run.id);
   const lines = ["telefone;status;wamid;motivo;delivery_status;delivery_error;ts"];
   const clean = (s) => (s || "").replace(/[\r\n;]/g, " ");
@@ -518,19 +708,25 @@ app.get("/api/runs/:id/download", (req, res) => {
     );
   }
   res.setHeader("Content-Type", "text/csv");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="relatorio_run_${run.id}.csv"`
-  );
+  res.setHeader("Content-Disposition", `attachment; filename="relatorio_run_${run.id}.csv"`);
   res.send(lines.join("\n"));
 });
 
 // ---------- Health ----------
 app.get("/healthz", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
+// Atribui runs órfãos (user_id NULL, de antes do multi-user) ao operador
+// principal — fecha o vazamento de isolamento sem perder histórico. Roda 1x no boot.
+(() => {
+  const primary = process.env.LOGIN_USER || HARDCODED_CLIENTS[0]?.user;
+  const moved = backfillRunOwners(primary);
+  if (moved) console.log(`  🔒 ${moved} run(s) legado(s) atribuído(s) a "${primary}"`);
+})();
+
 app.listen(PORT, () => {
   console.log(`\n  🚀 Disparador Node rodando em http://localhost:${PORT}`);
   console.log(`  📁 SQLite em ./data/app.db`);
+  if (isDryRun()) console.log(`  🧪 DRY-RUN ligado (DISPARO_DRY_RUN=1) — não envia de verdade`);
   const users = getConfiguredUsers();
   if (!users.length) {
     console.log(`  ⚠️  Nenhum usuário configurado!\n`);

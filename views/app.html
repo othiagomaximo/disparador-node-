@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=21" />
+  <link rel="stylesheet" href="/style.css?v=24" />
 </head>
 <body>
   <header>
@@ -15,7 +15,6 @@
       <button data-tab="disparo">3. Disparo</button>
       <button data-tab="relatorio">4. Relatório</button>
       <div style="margin-left:auto; display:flex; gap:8px;">
-        <button id="btn-clear-creds" class="ghost" title="Apaga token, phone ID e template salvos">🗑 Limpar credenciais</button>
         <form action="/logout" method="POST" style="margin:0">
           <button type="submit" class="ghost">Sair</button>
         </form>
@@ -26,23 +25,18 @@
   <main>
     <!-- TAB 1 - CONFIG -->
     <section data-pane="config" class="pane active">
-      <h2>Credenciais e Template</h2>
-      <p class="muted">Token do System User com permissão whatsapp_business_messaging. Pega no Meta Business Manager.</p>
-      <label>
-        Access Token *
-        <textarea id="cfg-access_token" rows="3" placeholder="EAA..."></textarea>
-      </label>
+      <h2>Contas WhatsApp</h2>
+      <p class="muted">Cada conta tem um <b>apelido</b> (ex: "Lourrany Beleza") e suas credenciais da Cloud API. Na hora de disparar você escolhe por qual conta enviar.</p>
+      <div id="accounts-list"></div>
+      <button id="add-account" class="ghost">+ Adicionar conta WhatsApp</button>
+
+      <h2 style="margin-top:32px;">Template &amp; envio</h2>
+      <p class="muted">Nome do template aprovado na Meta + idioma + quantas mensagens em paralelo.</p>
       <div class="row">
-        <label>
-          Phone Number ID *
-          <input id="cfg-phone_number_id" placeholder="15 dígitos" />
-        </label>
         <label>
           Nome do Template *
           <input id="cfg-template_name" placeholder="ex: registrodeclientes" />
         </label>
-      </div>
-      <div class="row">
         <label>
           Idioma
           <input id="cfg-language" value="pt_BR" />
@@ -52,7 +46,7 @@
           <input id="cfg-concurrency" type="number" min="1" max="50" value="10" />
         </label>
       </div>
-      <button id="save-config">💾 Salvar configuração</button>
+      <button id="save-config">💾 Salvar template</button>
       <p class="hint" id="save-config-msg"></p>
     </section>
 
@@ -89,13 +83,20 @@
     <!-- TAB 3 - DISPARO -->
     <section data-pane="disparo" class="pane">
       <h2>Disparo em massa</h2>
-      <div class="cards">
-        <div class="card"><h4>Total</h4><b id="stat-total">—</b></div>
-        <div class="card success"><h4>Enviados</h4><b id="stat-enviados">0</b></div>
-        <div class="card error"><h4>Falhas</h4><b id="stat-falhas">0</b></div>
-        <div class="card warn"><h4>Pulados</h4><b id="stat-pulados">0</b></div>
+
+      <div id="paused-banner" class="paused-banner hidden"></div>
+
+      <div class="row" style="align-items:flex-end;">
+        <label style="flex:2;">
+          Disparar pela conta: *
+          <select id="disparo-account"></select>
+        </label>
+        <label style="flex:1;">
+          Pausar após N disparos (opcional)
+          <input id="disparo-pauseat" type="number" min="1" placeholder="ex: 2000 — vazio = tudo" />
+        </label>
       </div>
-      <div class="progress"><div id="progress-bar"></div></div>
+
       <label style="display:flex; align-items:center; gap:8px; margin:12px 0; font-weight:normal;">
         <input type="checkbox" id="chk-skip-duplicates" checked />
         <span>Pular números já enviados em disparos anteriores <span class="muted">(recomendado)</span></span>
@@ -106,9 +107,11 @@
       <div id="preview-first-container" style="margin-bottom:12px;"></div>
       <div class="row">
         <button id="btn-start" class="primary">▶️ Iniciar disparo</button>
-        <button id="btn-stop" class="danger">⏹ Parar</button>
       </div>
-      <pre id="log" class="log"></pre>
+
+      <h3 style="margin-top:24px;">Disparos em andamento</h3>
+      <p class="muted" id="no-runs-msg">Nenhum disparo rodando. Configure a conta e clique em Iniciar.</p>
+      <div id="runs-cards"></div>
     </section>
 
     <!-- TAB 4 - RELATÓRIO -->
@@ -116,26 +119,17 @@
       <h2>Relatórios</h2>
       <p class="muted">Histórico de disparos. Clica num pra ver detalhes e baixar CSV.</p>
       <div id="runs-list"></div>
-      <div id="run-detail" class="hidden">
-        <h3 id="run-title"></h3>
-        <div class="row" style="align-items:center; gap:12px; margin-bottom:8px;">
-          <button id="btn-download-csv">⬇️ Baixar CSV</button>
-          <label style="display:flex; align-items:center; gap:6px; font-weight:normal;">
-            <span class="muted">Filtrar:</span>
-            <select id="delivery-filter">
-              <option value="all">Todos</option>
-              <option value="delivered">Entregues (delivered)</option>
-              <option value="read">Lidos (read)</option>
-              <option value="not_delivered">Não entregues (failed/sem confirmação)</option>
-              <option value="failed">Apenas falhas (failed)</option>
-            </select>
-          </label>
-        </div>
-        <div class="table-wrap"><table id="results-table"></table></div>
-      </div>
     </section>
   </main>
 
-  <script src="/app.js?v=21"></script>
+  <!-- MODAL: detalhes do relatório / pausa -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal" id="modal-box">
+      <button class="modal-close" id="modal-close">✕</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=24"></script>
 </body>
 </html>
