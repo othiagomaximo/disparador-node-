@@ -709,7 +709,9 @@ app.get("/api/runs/:id/download", wrap(async (req, res) => {
 }));
 
 // ---------- Health ----------
-app.get("/healthz", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get("/healthz", (req, res) =>
+  res.json({ ok: true, backend: dbInfo().backend, ts: new Date().toISOString() })
+);
 
 // Handler de erro padrão (handlers async que rejeitam caem aqui).
 app.use((err, req, res, next) => {
