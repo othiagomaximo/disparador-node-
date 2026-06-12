@@ -453,10 +453,11 @@ function handleEvt(evt) {
       appendRunLog(rid, numberedLine(rid, "⏭️", `${evt.phone} (já enviado)`));
       break;
     case "failure":
-      appendRunLog(rid, numberedLine(rid, "❌", `${evt.phone} → ${evt.code}: ${evt.message}`));
+      // Label amigável da Meta no log ao vivo (PARTE 2.1).
+      appendRunLog(rid, numberedLine(rid, "❌", `${evt.phone} → ${evt.label || (evt.code + ": " + evt.message)}`));
       break;
     case "blocked":
-      appendRunLog(rid, `🚫 BLOQUEIO ${evt.code}: ${evt.message}`);
+      appendRunLog(rid, `⏸ PAROU: ${evt.label || evt.message}${evt.dica ? " — " + evt.dica : ""}`);
       break;
     case "resumed":
       appendRunLog(rid, `▶️ retomado`);
@@ -645,11 +646,14 @@ async function loadRuns() {
         run.delivered_cnt > 0 || run.read_cnt > 0
           ? `<span class="muted" title="entregues · lidas (via webhook)">📬 ${run.delivered_cnt} · 👁 ${run.read_cnt}</span>`
           : "";
+      // PARTE 3.4: marcador de limite na lista, pra bater o olho.
+      const limiteTag = run.limite_cnt > 0 ? `<span class="limite-tag" title="essa conta bateu no limite de mensagens">🚫 limite</span>` : "";
       return `
     <div class="run-row" data-id="${run.id}">
       <span><b>#${run.id}</b></span>
       <span class="run-acc">${acc}</span>
       <span class="status-pill ${run.status}">${run.status}</span>
+      ${limiteTag}
       <span class="muted">${escapeHtml(fmtTs(run.started_at))}</span>
       <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
         <span>✅ ${run.enviados} · ❌ ${run.falhas} · 📋 ${run.total}</span>
@@ -684,9 +688,22 @@ function downloadUrl(url) {
 // ===== Modal de RELATÓRIO (PARTE 4) =====
 async function openReportModal(id) {
   const r = await fetch(`/api/disparo/run/${id}`);
-  const { run, counts, deliveryCounts, results } = await r.json();
+  const { run, counts, deliveryCounts, errorBreakdown, limitAlert, results } = await r.json();
   const cor = run.cor || "#8b949e";
   const acc = accLabel(run.apelido, run.icone, run.account_id);
+  // PARTE 3.2: breakdown agrupado das falhas (compacto). Só se houver falha.
+  const bk = errorBreakdown || [];
+  const breakdownLine = bk.length
+    ? `<div class="error-breakdown">❌ <b>${run.falhas}</b> falhas: ` +
+      bk.map((b) => `<span class="bk-item" title="${escapeAttr(b.label)}">${b.emoji} ${b.count} ${escapeHtml(b.short)}</span>`).join(" · ") +
+      `</div>`
+    : "";
+  // PARTE 3.3: alerta de limite no topo do modal.
+  const alertBanner = limitAlert?.ativo
+    ? `<div class="limit-alert">⚠️ Essa conta parece estar no <b>LIMITE de mensagens</b> (${limitAlert.limiteCount} erros de limite). Troque de conta WhatsApp pra continuar disparando.</div>`
+    : "";
+  // PARTE 4: legenda honesta do "ENVIADO".
+  const legend = `<div class="enviado-legend">ℹ️ <b>ENVIADO</b> = aceito pela Meta (não garante entrega no celular; entrega real exigiria webhook).</div>`;
   // Linha de ENTREGA (PARTE 4.4) — read conta como entregue (read ⊃ delivered).
   const dc = deliveryCounts || {};
   const entregues = (dc.delivered || 0) + (dc.read || 0);
@@ -703,6 +720,7 @@ async function openReportModal(id) {
   openModal(`
     <div class="report-modal">
       <h3><span class="account-swatch" style="background:${escapeAttr(cor)}"></span> ${acc} · run #${run.id} ${statusPill(run.status)}</h3>
+      ${alertBanner}
       <div class="report-grid">
         <div><span class="muted">WhatsApp</span><br>${escapeHtml(run.numero || "—")}</div>
         <div><span class="muted">Phone Number ID</span><br>${escapeHtml(run.phone_number_id || "—")}</div>
@@ -719,6 +737,8 @@ async function openReportModal(id) {
         <span class="warn">⏭️ <b>${run.pulados}</b></span>
         <span class="muted">pendentes: <b>${counts.pending}</b></span>
       </div>
+      ${breakdownLine}
+      ${legend}
       ${deliveryLine}
       <div class="row" style="flex-wrap:wrap; gap:8px;">
         <button id="rep-dl-all" class="ghost">⬇️ Baixar CSV completo</button>

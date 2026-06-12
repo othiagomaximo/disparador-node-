@@ -238,3 +238,26 @@ th { color: var(--muted); background: var(--panel); }
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
   padding: 10px 12px; font-size: 13px; margin-bottom: 12px;
 }
+
+/* ===== Prompt 26 — erros claros da Meta ===== */
+.error-breakdown {
+  font-size: 13px; margin: 4px 0 10px; line-height: 1.7;
+}
+.error-breakdown .bk-item {
+  display: inline-block; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; white-space: nowrap;
+}
+.limit-alert {
+  background: rgba(248,81,73,.12); border: 1px solid var(--error);
+  color: var(--text); border-radius: 8px; padding: 12px 14px;
+  font-size: 14px; margin: 8px 0 14px;
+}
+.enviado-legend {
+  font-size: 12px; color: var(--muted);
+  background: rgba(56,139,253,.08); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px; margin: 8px 0;
+}
+.limite-tag {
+  font-size: 11px; font-weight: 600; color: var(--error);
+  background: rgba(248,81,73,.12); border-radius: 999px; padding: 2px 8px;
+}
