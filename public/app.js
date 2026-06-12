@@ -22,6 +22,21 @@ function escapeHtml(s) {
 function escapeAttr(s) {
   return String(s ?? "").replace(/"/g, "&quot;");
 }
+// Rótulo da conta no relatório: distingue conta removida (run tem account_id mas
+// o apelido sumiu no LEFT JOIN) de run sem conta nenhuma. PARTE 3.5.
+function accLabel(apelido, icone, accountId) {
+  if (apelido) return `${escapeHtml(icone || "")} ${escapeHtml(apelido)}`;
+  if (accountId) return '<span class="muted">(conta removida)</span>';
+  return '<span class="muted">sem conta</span>';
+}
+// Postgres devolve timestamptz (ISO); SQLite devolve "YYYY-MM-DD HH:MM:SS".
+// Normaliza pra um formato curto legível.
+function fmtTs(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (isNaN(d)) return String(ts);
+  return d.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
 
 // ===== Config: Template =====
 async function loadConfig() {
@@ -86,6 +101,10 @@ function accountCardHtml(a) {
     </div>
     <label>Access Token ${a.has_token ? '<span class="muted">(salvo — deixe em branco pra manter)</span>' : ""}<textarea class="acc-token" rows="2" placeholder="${a.has_token ? "•••••••• preenchido" : "EAA..."}"></textarea></label>
     <div class="row">
+      <label>Template desta conta <input class="acc-template_name" value="${escapeAttr(a.template_name || "")}" placeholder="vazio = usa o template global" /></label>
+      <label style="max-width:140px;">Idioma <input class="acc-language" value="${escapeAttr(a.language || "")}" placeholder="pt_BR" /></label>
+    </div>
+    <div class="row">
       <button class="acc-save primary">💾 Salvar conta</button>
       ${a.id ? '<button class="acc-delete danger">🗑 Remover</button>' : '<button class="acc-cancel ghost">Cancelar</button>'}
       <span class="acc-msg hint"></span>
@@ -122,6 +141,8 @@ function bindAccountCard(card) {
         phone_number_id: get("acc-phone_number_id").value.trim(),
         waba_id: get("acc-waba_id").value.trim(),
         token: get("acc-token").value.trim(),
+        template_name: get("acc-template_name").value.trim(),
+        language: get("acc-language").value.trim(),
       };
       if (!body.apelido) {
         msg.textContent = "Apelido é obrigatório";
@@ -268,7 +289,9 @@ async function renderPreviewFirstInto(containerId) {
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
   container.innerHTML = '<div class="muted">Carregando preview...</div>';
   try {
-    const qs = new URLSearchParams({ phoneCol, varCols: varCols.join(",") });
+    // Passa a conta selecionada no disparo → backend resolve o template DA CONTA.
+    const accountId = document.getElementById("disparo-account")?.value || "";
+    const qs = new URLSearchParams({ phoneCol, varCols: varCols.join(","), accountId });
     const r = await fetch(`/api/disparo/preview-first?${qs}`);
     const j = await r.json();
     if (!r.ok) {
@@ -616,15 +639,21 @@ async function loadRuns() {
   }
   list.innerHTML = runs
     .map((run) => {
-      const acc = run.acc_apelido ? `${escapeHtml(run.acc_icone || "")} ${escapeHtml(run.acc_apelido)}` : '<span class="muted">sem conta</span>';
+      const acc = accLabel(run.acc_apelido, run.acc_icone, run.account_id);
+      // Resuminho de entrega (só se houver dado de webhook) — PARTE 4.5.
+      const deliv =
+        run.delivered_cnt > 0 || run.read_cnt > 0
+          ? `<span class="muted" title="entregues · lidas (via webhook)">📬 ${run.delivered_cnt} · 👁 ${run.read_cnt}</span>`
+          : "";
       return `
     <div class="run-row" data-id="${run.id}">
       <span><b>#${run.id}</b></span>
       <span class="run-acc">${acc}</span>
       <span class="status-pill ${run.status}">${run.status}</span>
-      <span class="muted">${run.started_at}</span>
+      <span class="muted">${escapeHtml(fmtTs(run.started_at))}</span>
       <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
         <span>✅ ${run.enviados} · ❌ ${run.falhas} · 📋 ${run.total}</span>
+        ${deliv}
         <button class="btn-row-download" data-id="${run.id}" title="Baixar relatório CSV" style="padding:4px 10px; font-size:12px;">⬇️ Baixar</button>
       </span>
     </div>`;
@@ -655,9 +684,16 @@ function downloadUrl(url) {
 // ===== Modal de RELATÓRIO (PARTE 4) =====
 async function openReportModal(id) {
   const r = await fetch(`/api/disparo/run/${id}`);
-  const { run, counts, results } = await r.json();
+  const { run, counts, deliveryCounts, results } = await r.json();
   const cor = run.cor || "#8b949e";
-  const acc = run.apelido ? `${escapeHtml(run.icone || "")} ${escapeHtml(run.apelido)}` : "(sem conta)";
+  const acc = accLabel(run.apelido, run.icone, run.account_id);
+  // Linha de ENTREGA (PARTE 4.4) — read conta como entregue (read ⊃ delivered).
+  const dc = deliveryCounts || {};
+  const entregues = (dc.delivered || 0) + (dc.read || 0);
+  const semConf = (run.enviados || 0) - entregues - (dc.failed || 0);
+  const deliveryLine = dc.hasWebhook
+    ? `<div class="delivery-line">📬 <b>${entregues}</b> entregues · 👁 <b>${dc.read || 0}</b> lidas · ❌ <b>${dc.failed || 0}</b> falhas de entrega · ⏳ ${Math.max(0, semConf)} sem confirmação</div>`
+    : `<div class="delivery-line muted">📭 Sem dados de entrega ainda — configure o webhook na Meta (ver instruções) ou aguarde os callbacks.</div>`;
   const last = results.slice(-50).reverse();
   const rowsHtml = last.length
     ? last
@@ -672,8 +708,9 @@ async function openReportModal(id) {
         <div><span class="muted">Phone Number ID</span><br>${escapeHtml(run.phone_number_id || "—")}</div>
         <div><span class="muted">WABA ID</span><br>${escapeHtml(run.waba_id || "—")}</div>
         <div><span class="muted">Lista</span><br>${escapeHtml(run.filename || "—")}</div>
-        <div><span class="muted">Início</span><br>${escapeHtml(run.started_at || "—")}</div>
-        <div><span class="muted">Fim</span><br>${escapeHtml(run.finished_at || "—")}</div>
+        <div><span class="muted">Template</span><br>${escapeHtml(run.template_name || "—")}</div>
+        <div><span class="muted">Início</span><br>${escapeHtml(fmtTs(run.started_at))}</div>
+        <div><span class="muted">Fim</span><br>${escapeHtml(fmtTs(run.finished_at))}</div>
       </div>
       <div class="run-card-stats" style="margin:12px 0;">
         <span>📋 <b>${run.total}</b></span>
@@ -682,6 +719,7 @@ async function openReportModal(id) {
         <span class="warn">⏭️ <b>${run.pulados}</b></span>
         <span class="muted">pendentes: <b>${counts.pending}</b></span>
       </div>
+      ${deliveryLine}
       <div class="row" style="flex-wrap:wrap; gap:8px;">
         <button id="rep-dl-all" class="ghost">⬇️ Baixar CSV completo</button>
         <button id="rep-dl-report" class="ghost">⬇️ Baixar relatório (entrega)</button>
