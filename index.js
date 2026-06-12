@@ -682,6 +682,72 @@ function safeFilename(rawName, runId) {
   return base || `run_${runId}`;
 }
 
+// PARTE 1 (prompt 27) — CORTE MANUAL.
+// N conta a POSIÇÃO entre os ENVIADOS (status 'sent'), na ordem do CSV (idx).
+// Acha o idx da N-ésima linha enviada → idxCorte (inclusive). rows já vem por idx.
+//  - N vazio  → default = total de enviados (corte no último enviado).
+//  - N < 1    → erro.
+//  - N ≥ enviados → idxCorte = idx do último enviado.
+//  - 0 enviados → idxCorte = -1 (nada disparou: sent vazio, resend = tudo).
+function computeIdxCorte(rows, nRaw) {
+  const enviados = rows.filter((r) => r.status === "sent"); // já em ordem de idx
+  let n;
+  if (nRaw == null || String(nRaw).trim() === "") {
+    n = enviados.length; // default
+  } else {
+    n = parseInt(nRaw, 10);
+    if (!Number.isFinite(n) || n < 1) return { error: "Informe um número >= 1" };
+  }
+  let idxCorte;
+  if (enviados.length === 0) {
+    idxCorte = -1;
+  } else {
+    const k = Math.min(n, enviados.length); // se N ≥ enviados, pega o último
+    idxCorte = enviados[k - 1].idx;
+  }
+  return { idxCorte, enviadosCount: enviados.length, n };
+}
+
+// Os que DISPARARAM (1 a N): linhas 'sent' com idx <= idxCorte.
+app.get("/api/disparo/run/:id/sent.csv", wrap(async (req, res) => {
+  const user = req.session.user;
+  const run = await getRun(Number(req.params.id));
+  if (!run || run.user_id !== user) return res.status(404).send("Not found");
+  const allRows = await getAllRunRows(run.id);
+  const cut = computeIdxCorte(allRows, req.query.upto);
+  if (cut.error) return res.status(400).json({ error: cut.error });
+  const headers = safeParse(run.csv_headers, []);
+  const delim = run.csv_delimiter || ",";
+  const rows = allRows
+    .filter((r) => r.status === "sent" && r.idx <= cut.idxCorte)
+    .map((r) => safeParse(r.row_json, {}));
+  const csv = buildDelimitedCsv(headers, rows, delim);
+  const base = safeFilename(run.csv_filename, run.id);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${base}_disparados_1-a-${cut.n}.csv"`);
+  res.send("\uFEFF" + csv);
+}));
+
+// Os que NÃO dispararam (N+1 em diante): TODAS as linhas com idx > idxCorte.
+app.get("/api/disparo/run/:id/resend.csv", wrap(async (req, res) => {
+  const user = req.session.user;
+  const run = await getRun(Number(req.params.id));
+  if (!run || run.user_id !== user) return res.status(404).send("Not found");
+  const allRows = await getAllRunRows(run.id);
+  const cut = computeIdxCorte(allRows, req.query.after);
+  if (cut.error) return res.status(400).json({ error: cut.error });
+  const headers = safeParse(run.csv_headers, []);
+  const delim = run.csv_delimiter || ",";
+  const rows = allRows
+    .filter((r) => r.idx > cut.idxCorte)
+    .map((r) => safeParse(r.row_json, {}));
+  const csv = buildDelimitedCsv(headers, rows, delim);
+  const base = safeFilename(run.csv_filename, run.id);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${base}_reenviar_apos-${cut.n}.csv"`);
+  res.send("\uFEFF" + csv);
+}));
+
 function buildDelimitedCsv(headers, rowsObjs, delimiter) {
   const delim = delimiter || ",";
   const esc = (v) => {

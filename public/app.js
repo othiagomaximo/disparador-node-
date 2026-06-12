@@ -746,6 +746,18 @@ async function openReportModal(id) {
         ${counts.pending > 0 ? '<button id="rep-dl-pending" class="ghost">⬇️ Baixar CSV NÃO disparados</button>' : ""}
         ${run.status === "paused" ? '<button id="rep-continue" class="primary">▶️ Continuar disparo</button>' : ""}
       </div>
+      <div class="cut-section">
+        <h4 style="margin:0 0 4px;">✂️ Corte manual / reenviar</h4>
+        <p class="muted" style="margin:0 0 8px;">Se a conta entrou no limite no meio e o sistema marcou como <b>ENVIADO</b> mensagens que não saíram de verdade, informe quantos <b>REALMENTE</b> saíram. Você baixa os 2 lados pra continuar numa conta nova.</p>
+        <div class="row" style="align-items:flex-end; gap:8px; flex-wrap:wrap;">
+          <label style="max-width:240px; margin:0;">Quantos disparos REALMENTE saíram?
+            <input id="cut-n" type="number" min="1" value="${run.enviados || ""}" />
+          </label>
+          <button id="cut-sent" class="ghost">⬇ Baixar os que dispararam (1 a N)</button>
+          <button id="cut-resend" class="primary">⬇ Baixar os que NÃO dispararam (N+1 em diante)</button>
+        </div>
+        <p class="hint" style="margin:6px 0 0;">N conta a posição entre os ENVIADOS (✅), na ordem da lista. O corte é posicional — falhas/pendentes <i>antes</i> de N não entram no "reenviar".</p>
+      </div>
       <h4 style="margin:16px 0 6px;">Últimos ${last.length} números</h4>
       <div class="table-wrap" style="max-height:240px; overflow:auto;">
         <table><thead><tr><th>Telefone</th><th>Status</th><th>Entrega</th><th>Motivo</th></tr></thead><tbody>${rowsHtml}</tbody></table>
@@ -755,6 +767,19 @@ async function openReportModal(id) {
   document.getElementById("rep-dl-report")?.addEventListener("click", () => downloadUrl(`/api/runs/${id}/download`));
   document.getElementById("rep-dl-pending")?.addEventListener("click", () => downloadUrl(`/api/disparo/run/${id}/pending.csv`));
   document.getElementById("rep-continue")?.addEventListener("click", () => openPauseModal(id));
+  // ✂️ Corte manual: lê N e baixa cada lado. N vazio → backend usa o default.
+  const cutVal = () => document.getElementById("cut-n").value.trim();
+  const cutValid = (v) => v === "" || (/^\d+$/.test(v) && parseInt(v, 10) >= 1);
+  document.getElementById("cut-sent")?.addEventListener("click", () => {
+    const v = cutVal();
+    if (!cutValid(v)) return alert("Informe um número inteiro maior ou igual a 1.");
+    downloadUrl(`/api/disparo/run/${id}/sent.csv${v !== "" ? `?upto=${encodeURIComponent(v)}` : ""}`);
+  });
+  document.getElementById("cut-resend")?.addEventListener("click", () => {
+    const v = cutVal();
+    if (!cutValid(v)) return alert("Informe um número inteiro maior ou igual a 1.");
+    downloadUrl(`/api/disparo/run/${id}/resend.csv${v !== "" ? `?after=${encodeURIComponent(v)}` : ""}`);
+  });
 }
 
 // ===== Init =====
