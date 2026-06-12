@@ -234,3 +234,7 @@ th { color: var(--muted); background: var(--panel); }
   gap: 12px; margin: 12px 0; font-size: 13px;
 }
 .report-grid > div { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.delivery-line {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; font-size: 13px; margin-bottom: 12px;
+}

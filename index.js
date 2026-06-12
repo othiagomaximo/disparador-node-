@@ -18,6 +18,7 @@ import {
   getRun,
   getRunWithAccount,
   getRunResults,
+  getDeliveryCounts,
   updateDeliveryStatusByWamid,
   listAccounts,
   getAccount,
@@ -30,6 +31,8 @@ import {
   getAllRunRows,
   countRunRows,
   backfillRunOwners,
+  recoverRunningRuns,
+  dbInfo,
 } from "./lib/db.js";
 import {
   normalizePhoneDetailed,
@@ -63,10 +66,6 @@ const MemoryStore = createMemoryStore(session);
 
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
-// no-cache nos assets estáticos (app.js, style.css): força o browser a
-// revalidar a cada load. Sem isso, após um deploy o navegador pode rodar
-// um app.js ANTIGO em cima do app.html NOVO — handlers órfãos quebram a
-// página inteira (regressão de cache, não de código). 304 quando inalterado.
 app.use(
   express.static(join(__dirname, "public"), {
     setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
@@ -79,23 +78,24 @@ app.use(
     secret: process.env.SESSION_SECRET || "dev-secret-troque-em-producao",
     resave: false,
     saveUninitialized: false,
-    cookie: {
-      maxAge: 1000 * 60 * 60 * 24, // 24h
-      httpOnly: true,
-      sameSite: "lax",
-    },
+    cookie: { maxAge: 1000 * 60 * 60 * 24, httpOnly: true, sameSite: "lax" },
   })
 );
 
 const upload = multer({ dest: "./uploads/", limits: { fileSize: 30 * 1024 * 1024 } });
 
 const safeParse = (s, fb) => {
+  if (typeof s !== "string" || s === "") return fb;
   try {
-    return JSON.parse(s);
+    const v = JSON.parse(s);
+    return v == null ? fb : v;
   } catch {
     return fb;
   }
 };
+
+// Wrapper que captura erros de handlers async e devolve 500 (em vez de pendurar).
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 // ---------- AUTH ----------
 app.get("/login", (req, res) => {
@@ -103,7 +103,6 @@ app.get("/login", (req, res) => {
   res.sendFile(join(__dirname, "views", "login.html"));
 });
 
-// Lê todos os usuários configurados em env vars + clientes fixos no código.
 const HARDCODED_CLIENTS = [
   { user: "cliente1", secret: "Cliente1@2026", isHash: false },
   { user: "cliente2", secret: "Cliente2@2026", isHash: false },
@@ -117,11 +116,8 @@ function getConfiguredUsers() {
     const plain = process.env[passKey];
     const hash = process.env[hashKey];
     if (!user) return;
-    if (plain) {
-      users.push({ user, secret: plain, isHash: false });
-    } else if (hash) {
-      users.push({ user, secret: hash, isHash: true });
-    }
+    if (plain) users.push({ user, secret: plain, isHash: false });
+    else if (hash) users.push({ user, secret: hash, isHash: true });
   }
   pushIf("LOGIN_USER", "LOGIN_PASSWORD", "LOGIN_PASSWORD_HASH");
   for (let i = 2; i <= 10; i++) {
@@ -133,20 +129,16 @@ function getConfiguredUsers() {
   return users;
 }
 
-app.post("/login", async (req, res) => {
+app.post("/login", (req, res) => {
   const { user, password } = req.body || {};
   const users = getConfiguredUsers();
-  if (!users.length) {
-    return res.status(500).send("Nenhum usuário configurado");
-  }
+  if (!users.length) return res.status(500).send("Nenhum usuário configurado");
   const match = users.find((u) => {
     if (u.user !== user) return false;
     if (u.isHash) return bcrypt.compareSync(password || "", u.secret);
     return password === u.secret;
   });
-  if (!match) {
-    return res.status(401).sendFile(join(__dirname, "views", "login-fail.html"));
-  }
+  if (!match) return res.status(401).sendFile(join(__dirname, "views", "login-fail.html"));
   req.session.user = user;
   res.redirect("/");
 });
@@ -155,51 +147,54 @@ app.post("/logout", (req, res) => {
   req.session.destroy(() => res.redirect("/login"));
 });
 
-// ---------- WEBHOOK META (público — autenticado por verify token) ----------
+// ---------- WEBHOOK META (público — verify token) ----------
 app.get("/api/webhook", (req, res) => {
   const expected = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-  if (!expected) {
-    return res.status(500).send("WHATSAPP_VERIFY_TOKEN não configurado no servidor");
-  }
-  if (mode === "subscribe" && token === expected) {
-    return res.status(200).send(String(challenge ?? ""));
-  }
+  if (!expected) return res.status(500).send("WHATSAPP_VERIFY_TOKEN não configurado no servidor");
+  if (mode === "subscribe" && token === expected) return res.status(200).send(String(challenge ?? ""));
   return res.sendStatus(403);
 });
 
-// Recebe atualizações de status (sent/delivered/read/failed) e atualiza
-// run_results pelo wamid. Sempre responde 200 — a Meta retenta em loop se não.
+// Atualizações de status (sent/delivered/read/failed). Responde 200 IMEDIATO
+// (Meta reenvia se não receber 200 rápido) e processa TODOS os statuses do
+// batch em background. PARTE 4.1/4.2.
 app.post("/api/webhook", (req, res) => {
-  try {
-    const entries = req.body?.entry || [];
-    for (const entry of entries) {
-      const changes = entry?.changes || [];
-      for (const change of changes) {
-        const statuses = change?.value?.statuses || [];
-        for (const st of statuses) {
-          const wamid = st?.id;
-          const status = st?.status; // sent | delivered | read | failed
-          if (!wamid || !status) continue;
-          let deliveryError = null;
-          if (status === "failed") {
-            const e0 = st?.errors?.[0];
-            if (e0) {
-              const code = e0.code ?? "?";
-              const title = e0.title || e0.message || "";
-              deliveryError = `${code}: ${title}`.slice(0, 200);
+  res.sendStatus(200);
+  (async () => {
+    try {
+      const entries = req.body?.entry || [];
+      for (const entry of entries) {
+        for (const change of entry?.changes || []) {
+          for (const st of change?.value?.statuses || []) {
+            const wamid = st?.id;
+            const status = st?.status; // sent | delivered | read | failed
+            if (!wamid || !status) continue;
+            let deliveryError = null;
+            if (status === "failed") {
+              const e0 = st?.errors?.[0];
+              if (e0) {
+                const code = e0.code ?? "?";
+                const title = e0.title || e0.message || "";
+                deliveryError = `${code}: ${title}`.slice(0, 200);
+              }
+            }
+            // try/catch POR status: um wamid que falha (ex.: hiccup do DB) não
+            // pode parar o resto do batch — a Meta já recebeu o 200, não reenvia.
+            try {
+              await updateDeliveryStatusByWamid(wamid, status, deliveryError);
+            } catch (e) {
+              console.error(`webhook update ${wamid} falhou:`, e?.message || e);
             }
           }
-          updateDeliveryStatusByWamid(wamid, status, deliveryError);
         }
       }
+    } catch (e) {
+      console.error("webhook process error:", e?.message || e);
     }
-  } catch (e) {
-    console.error("webhook parse error:", e?.message || e);
-  }
-  res.sendStatus(200);
+  })();
 });
 
 // ---------- APP (protegido) ----------
@@ -210,35 +205,31 @@ app.get("/", (req, res) => {
   res.sendFile(join(__dirname, "views", "app.html"));
 });
 
-// ---------- API: Config (template/idioma/threads — credenciais agora em contas) ----------
-app.get("/api/config", (req, res) => {
-  const cfg = getAllConfig();
-  // Só expõe as chaves de envio (não credenciais legadas/markers internos).
+// ---------- API: Config (template/idioma globais = FALLBACK; threads) ----------
+app.get("/api/config", wrap(async (req, res) => {
+  const cfg = await getAllConfig();
   res.json({
     template_name: cfg.template_name || "",
     language: cfg.language || "pt_BR",
     concurrency: cfg.concurrency || "10",
   });
-});
+}));
 
-app.post("/api/config", (req, res) => {
-  const allowed = ["template_name", "language", "concurrency"];
-  for (const k of allowed) {
-    if (k in req.body) setConfig(k, String(req.body[k] ?? ""));
+app.post("/api/config", wrap(async (req, res) => {
+  for (const k of ["template_name", "language", "concurrency"]) {
+    if (k in req.body) await setConfig(k, String(req.body[k] ?? ""));
   }
   res.json({ ok: true });
-});
+}));
 
-// ---------- PARTE 1: API de contas WhatsApp (por usuário) ----------
-// Migração: user sem contas + config legada (token+phone globais) ganha uma
-// "Conta principal" automaticamente, pra ninguém logar e ver a config sumida.
-function ensureAccountsForUser(user) {
-  const existing = listAccounts(user);
+// ---------- API de contas WhatsApp (por usuário) ----------
+async function ensureAccountsForUser(user) {
+  const existing = await listAccounts(user);
   if (existing.length) return existing;
-  if (getConfig(`acct_migrated_${user}`)) return existing; // já migrou antes
-  const cfg = getAllConfig();
+  if (await getConfig(`acct_migrated_${user}`)) return existing;
+  const cfg = await getAllConfig();
   if (cfg.access_token && cfg.phone_number_id) {
-    createAccount(user, {
+    await createAccount(user, {
       apelido: "Conta principal",
       icone: "📱",
       cor: "#25D366",
@@ -246,9 +237,11 @@ function ensureAccountsForUser(user) {
       phone_number_id: cfg.phone_number_id,
       waba_id: cfg.waba_id || "",
       token: cfg.access_token,
+      template_name: cfg.template_name || "",
+      language: cfg.language || "",
     });
-    setConfig(`acct_migrated_${user}`, "1");
-    return listAccounts(user);
+    await setConfig(`acct_migrated_${user}`, "1");
+    return await listAccounts(user);
   }
   return existing;
 }
@@ -266,41 +259,42 @@ function validateAccount(body) {
       phone_number_id: String(body.phone_number_id ?? "").trim().slice(0, 60) || null,
       waba_id: String(body.waba_id ?? "").trim().slice(0, 60) || null,
       token: String(body.token ?? "").trim() || null,
+      template_name: String(body.template_name ?? "").trim().slice(0, 120) || null,
+      language: String(body.language ?? "").trim().slice(0, 20) || null,
     },
   };
 }
 
-app.get("/api/accounts", (req, res) => {
-  // NUNCA devolve o token Meta pro cliente — só sinaliza se já está preenchido
-  // (has_token). Editar a conta sem redigitar o token preserva (COALESCE no DB).
-  const accounts = ensureAccountsForUser(req.session.user).map(({ token, ...a }) => ({
+app.get("/api/accounts", wrap(async (req, res) => {
+  // NUNCA devolve o token Meta — só has_token. Editar sem redigitar preserva.
+  const accounts = (await ensureAccountsForUser(req.session.user)).map(({ token, ...a }) => ({
     ...a,
     has_token: !!token,
   }));
   res.json(accounts);
-});
+}));
 
-app.post("/api/accounts", (req, res) => {
+app.post("/api/accounts", wrap(async (req, res) => {
   const user = req.session.user;
   const v = validateAccount(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
   const id = req.body?.id ? Number(req.body.id) : null;
   if (id) {
-    const owned = getAccountForUser(id, user);
+    const owned = await getAccountForUser(id, user);
     if (!owned) return res.status(404).json({ error: "Conta não encontrada" });
-    return res.json({ ok: true, account: updateAccount(id, user, v.data) });
+    return res.json({ ok: true, account: await updateAccount(id, user, v.data) });
   }
-  res.json({ ok: true, account: createAccount(user, v.data) });
-});
+  res.json({ ok: true, account: await createAccount(user, v.data) });
+}));
 
-app.delete("/api/accounts/:id", (req, res) => {
-  const ok = deleteAccount(Number(req.params.id), req.session.user);
+app.delete("/api/accounts/:id", wrap(async (req, res) => {
+  const ok = await deleteAccount(Number(req.params.id), req.session.user);
   if (!ok) return res.status(404).json({ error: "Conta não encontrada" });
   res.json({ ok: true });
-});
+}));
 
-// ---------- API: CSV upload + parse (PARTE 3.6: buffer POR USUÁRIO) ----------
-const CSV_BUFFERS = new Map(); // key: userId → buffer (1 por user/sessão)
+// ---------- API: CSV upload (buffer POR USUÁRIO, em memória) ----------
+const CSV_BUFFERS = new Map();
 const getBuf = (req) => CSV_BUFFERS.get(req.session.user) || null;
 
 function guessPhoneCol(headers) {
@@ -438,13 +432,24 @@ app.get("/api/csv/current", (req, res) => {
   });
 });
 
+// Resolve template/idioma de um disparo: o da CONTA tem prioridade; senão o
+// global (config). PARTE 3.3.
+async function resolveTemplate(account) {
+  const cfg = await getAllConfig();
+  return {
+    template_name: account?.template_name || cfg.template_name || "",
+    language: account?.language || cfg.language || "pt_BR",
+  };
+}
+
 // ---------- API: Disparo ----------
-app.get("/api/disparo/preview-first", (req, res) => {
+app.get("/api/disparo/preview-first", wrap(async (req, res) => {
   const buf = getBuf(req);
-  if (!buf || !buf.rows.length) {
-    return res.status(400).json({ error: "Suba CSV primeiro" });
-  }
-  const cfg = getAllConfig();
+  if (!buf || !buf.rows.length) return res.status(400).json({ error: "Suba CSV primeiro" });
+  // Template da conta selecionada (fallback global) — PARTE 3.4.
+  let account = null;
+  if (req.query.accountId) account = await getAccountForUser(Number(req.query.accountId), req.session.user);
+  const { template_name, language } = await resolveTemplate(account);
   const phoneCol = req.query.phoneCol || buf.phoneCol || guessPhoneCol(buf.headers);
   const varCols = req.query.varCols
     ? String(req.query.varCols).split(",").map((s) => s.trim()).filter(Boolean)
@@ -452,30 +457,25 @@ app.get("/api/disparo/preview-first", (req, res) => {
   const row = buf.rows[0];
   const phone = phoneCol ? cleanPhone(row[phoneCol]) : "";
   const variables = varCols.map((c, i) => ({ index: i + 1, column: c, value: row[c] ?? "" }));
-  res.json({
-    phone,
-    template_name: cfg.template_name || null,
-    language: cfg.language || "pt_BR",
-    variables,
-  });
-});
+  res.json({ phone, template_name: template_name || null, language, variables });
+}));
 
-// Inicia um disparo. Faz SNAPSHOT do CSV do user (PARTE 3.6) — depois disso o
-// run vive independente do CSV_BUFFER. Exige accountId (PARTE 1) e aceita
-// pauseAt opcional (PARTE 5).
-app.post("/api/disparo/start", (req, res) => {
+app.post("/api/disparo/start", wrap(async (req, res) => {
   const user = req.session.user;
   const buf = getBuf(req);
   if (!buf) return res.status(400).json({ error: "Suba o CSV primeiro" });
-  const cfg = getAllConfig();
-  if (!cfg.template_name) return res.status(400).json({ error: "Configure o nome do template (aba 1)" });
 
   const { phoneCol, varCols, skipDuplicates, accountId, pauseAt } = req.body || {};
   if (!accountId) return res.status(400).json({ error: "Escolha a conta WhatsApp pra disparar" });
-  const account = getAccountForUser(Number(accountId), user);
+  const account = await getAccountForUser(Number(accountId), user);
   if (!account) return res.status(400).json({ error: "Conta inválida" });
   if (!account.token || !account.phone_number_id) {
     return res.status(400).json({ error: `A conta "${account.apelido}" está sem token ou Phone Number ID` });
+  }
+  // Template da conta (fallback global). PARTE 3.3.
+  const { template_name, language } = await resolveTemplate(account);
+  if (!template_name) {
+    return res.status(400).json({ error: `Defina um template na conta "${account.apelido}" ou no template global (aba 1)` });
   }
   if (!phoneCol) return res.status(400).json({ error: "Mapeie a coluna do telefone" });
   const skip = skipDuplicates === undefined || skipDuplicates === null ? true : !!skipDuplicates;
@@ -498,9 +498,10 @@ app.post("/api/disparo/start", (req, res) => {
 
   const paNum = parseInt(pauseAt, 10);
   const pauseAtVal = Number.isFinite(paNum) && paNum > 0 ? paNum : null;
+  const cfg = await getAllConfig();
 
   try {
-    const { runId, snapshot } = startDisparo(leads, {
+    const { runId, snapshot } = await startDisparo(leads, {
       userId: user,
       account: {
         id: account.id,
@@ -512,8 +513,8 @@ app.post("/api/disparo/start", (req, res) => {
         waba_id: account.waba_id,
         token: account.token,
       },
-      templateName: cfg.template_name,
-      language: cfg.language || "pt_BR",
+      templateName: template_name,
+      language,
       concurrency: Number(cfg.concurrency) || 10,
       skipDuplicates: skip,
       pauseAt: pauseAtVal,
@@ -526,19 +527,17 @@ app.post("/api/disparo/start", (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
-});
+}));
 
-// Runs ativos (em memória) deste user — pra renderizar os cards no load.
 app.get("/api/disparo/active", (req, res) => {
   res.json({ runs: getUserRuns(req.session.user), maxParallel: MAX_PARALLEL_RUNS_PER_USER, dryRun: isDryRun() });
 });
 
-// Runs pausados (do banco) — pra banner "você tem disparos pausados".
-app.get("/api/disparo/my-paused-runs", (req, res) => {
-  res.json(listPausedRuns(req.session.user));
-});
+app.get("/api/disparo/my-paused-runs", wrap(async (req, res) => {
+  res.json(await listPausedRuns(req.session.user));
+}));
 
-// SSE multiplexado: 1 conexão, eventos de todos os runs do user (cada um com runId).
+// SSE multiplexado: 1 conexão, eventos de todos os runs do user.
 app.get("/api/disparo/stream", (req, res) => {
   const user = req.session.user;
   res.setHeader("Content-Type", "text/event-stream");
@@ -549,12 +548,10 @@ app.get("/api/disparo/stream", (req, res) => {
   for (const s of getUserRuns(user)) {
     res.write(`data: ${JSON.stringify({ type: "status", runId: s.runId, stats: s })}\n\n`);
   }
-
   const onEvent = (e) => {
     if (e.userId === user) res.write(`data: ${JSON.stringify(e)}\n\n`);
   };
   BUS.on("event", onEvent);
-
   const ping = setInterval(() => res.write(`: ping\n\n`), 15000);
   req.on("close", () => {
     clearInterval(ping);
@@ -562,14 +559,16 @@ app.get("/api/disparo/stream", (req, res) => {
   });
 });
 
-// Detalhe de um run (modal de relatório / pausa) — inclui apelido/icone/cor +
-// dados técnicos da conta + stats + últimos resultados.
-app.get("/api/disparo/run/:id", (req, res) => {
+// Detalhe de um run (modal) — conta + stats + agregados de ENTREGA (webhook).
+app.get("/api/disparo/run/:id", wrap(async (req, res) => {
   const user = req.session.user;
-  const run = getRunWithAccount(Number(req.params.id));
+  const run = await getRunWithAccount(Number(req.params.id));
   if (!run || run.user_id !== user) return res.status(404).json({ error: "Run não encontrado" });
-  const counts = countRunRows(run.id);
-  const results = getRunResults(run.id);
+  const [counts, results, deliveryCounts] = await Promise.all([
+    countRunRows(run.id),
+    getRunResults(run.id),
+    getDeliveryCounts(run.id),
+  ]);
   const live = getRunSnapshot(user, run.id);
   res.json({
     run: {
@@ -586,7 +585,9 @@ app.get("/api/disparo/run/:id", (req, res) => {
       pauseAt: run.pause_at,
       pauseReason: run.pause_reason,
       filename: run.csv_filename,
+      template_name: run.template_name,
       motivo: run.motivo,
+      account_id: run.account_id,
       apelido: run.acc_apelido,
       icone: run.acc_icone,
       cor: run.acc_cor,
@@ -595,69 +596,65 @@ app.get("/api/disparo/run/:id", (req, res) => {
       waba_id: run.acc_waba_id,
     },
     counts,
+    deliveryCounts,
     results,
   });
-});
+}));
 
-app.post("/api/disparo/run/:id/pause", (req, res) => {
+app.post("/api/disparo/run/:id/pause", wrap(async (req, res) => {
   try {
-    res.json({ ok: true, snapshot: pauseRun(req.session.user, Number(req.params.id)) });
+    res.json({ ok: true, snapshot: await pauseRun(req.session.user, Number(req.params.id)) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
-});
+}));
 
-app.post("/api/disparo/run/:id/abort", (req, res) => {
+app.post("/api/disparo/run/:id/abort", wrap(async (req, res) => {
   try {
-    res.json({ ok: true, ...abortRun(req.session.user, Number(req.params.id)) });
+    res.json({ ok: true, ...(await abortRun(req.session.user, Number(req.params.id))) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
-});
+}));
 
-app.post("/api/disparo/run/:id/resume", (req, res) => {
+app.post("/api/disparo/run/:id/resume", wrap(async (req, res) => {
   try {
     const { count } = req.body || {};
-    res.json({ ok: true, snapshot: resumeRun(req.session.user, Number(req.params.id), count) });
+    res.json({ ok: true, snapshot: await resumeRun(req.session.user, Number(req.params.id), count) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
-});
+}));
 
-// CSV dos NÃO disparados — header/colunas/separador idênticos ao importado,
-// valores ORIGINAIS, filtrado pras linhas ainda pendentes. Pra reimportar.
-app.get("/api/disparo/run/:id/pending.csv", (req, res) => {
+// CSV dos NÃO disparados — idêntico ao import, valores ORIGINAIS, só pendentes.
+app.get("/api/disparo/run/:id/pending.csv", wrap(async (req, res) => {
   const user = req.session.user;
-  const run = getRun(Number(req.params.id));
+  const run = await getRun(Number(req.params.id));
   if (!run || run.user_id !== user) return res.status(404).send("Not found");
   const headers = safeParse(run.csv_headers, []);
   const delim = run.csv_delimiter || ",";
-  const rows = getPendingRows(run.id).map((r) => safeParse(r.row_json, {}));
+  const rows = (await getPendingRows(run.id)).map((r) => safeParse(r.row_json, {}));
   const csv = buildDelimitedCsv(headers, rows, delim);
   const base = safeFilename(run.csv_filename, run.id);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${base}_pendentes.csv"`);
   res.send("\uFEFF" + csv);
-});
+}));
 
-// CSV completo (todas as linhas originais do snapshot do run), mesmo formato.
-app.get("/api/disparo/run/:id/all.csv", (req, res) => {
+app.get("/api/disparo/run/:id/all.csv", wrap(async (req, res) => {
   const user = req.session.user;
-  const run = getRun(Number(req.params.id));
+  const run = await getRun(Number(req.params.id));
   if (!run || run.user_id !== user) return res.status(404).send("Not found");
   const headers = safeParse(run.csv_headers, []);
   const delim = run.csv_delimiter || ",";
-  const rows = getAllRunRows(run.id).map((r) => safeParse(r.row_json, {}));
+  const rows = (await getAllRunRows(run.id)).map((r) => safeParse(r.row_json, {}));
   const csv = buildDelimitedCsv(headers, rows, delim);
   const base = safeFilename(run.csv_filename, run.id);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${base}_completo.csv"`);
   res.send("\uFEFF" + csv);
-});
+}));
 
-// Base de nome de arquivo seguro pro header Content-Disposition. O nome vem do
-// upload (req.file.originalname, NÃO sanitizado por multer) — remove aspas,
-// ponto-e-vírgula e quebras pra não injetar parâmetros no header.
 function safeFilename(rawName, runId) {
   const base = String(rawName || `run_${runId}`)
     .replace(/\.csv$/i, "")
@@ -682,24 +679,23 @@ function buildDelimitedCsv(headers, rowsObjs, delimiter) {
 }
 
 // ---------- API: Relatórios ----------
-app.get("/api/runs", (req, res) => {
-  res.json(listRuns(50, req.session.user));
-});
+app.get("/api/runs", wrap(async (req, res) => {
+  res.json(await listRuns(50, req.session.user));
+}));
 
-app.get("/api/runs/:id", (req, res) => {
-  const run = getRunWithAccount(Number(req.params.id));
+app.get("/api/runs/:id", wrap(async (req, res) => {
+  const run = await getRunWithAccount(Number(req.params.id));
   if (!run || run.user_id !== req.session.user) {
     return res.status(404).json({ error: "Run não encontrada" });
   }
-  const results = getRunResults(run.id);
+  const results = await getRunResults(run.id);
   res.json({ run, results });
-});
+}));
 
-// CSV no formato de RELATÓRIO (telefone;status;wamid;...) — log de entrega.
-app.get("/api/runs/:id/download", (req, res) => {
-  const run = getRun(Number(req.params.id));
+app.get("/api/runs/:id/download", wrap(async (req, res) => {
+  const run = await getRun(Number(req.params.id));
   if (!run || run.user_id !== req.session.user) return res.status(404).send("Not found");
-  const results = getRunResults(run.id);
+  const results = await getRunResults(run.id);
   const lines = ["telefone;status;wamid;motivo;delivery_status;delivery_error;ts"];
   const clean = (s) => (s || "").replace(/[\r\n;]/g, " ");
   for (const r of results) {
@@ -710,29 +706,43 @@ app.get("/api/runs/:id/download", (req, res) => {
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="relatorio_run_${run.id}.csv"`);
   res.send(lines.join("\n"));
-});
+}));
 
 // ---------- Health ----------
 app.get("/healthz", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-// Atribui runs órfãos (user_id NULL, de antes do multi-user) ao operador
-// principal — fecha o vazamento de isolamento sem perder histórico. Roda 1x no boot.
-(() => {
-  const primary = process.env.LOGIN_USER || HARDCODED_CLIENTS[0]?.user;
-  const moved = backfillRunOwners(primary);
-  if (moved) console.log(`  🔒 ${moved} run(s) legado(s) atribuído(s) a "${primary}"`);
-})();
-
-app.listen(PORT, () => {
-  console.log(`\n  🚀 Disparador Node rodando em http://localhost:${PORT}`);
-  console.log(`  📁 SQLite em ./data/app.db`);
-  if (isDryRun()) console.log(`  🧪 DRY-RUN ligado (DISPARO_DRY_RUN=1) — não envia de verdade`);
-  const users = getConfiguredUsers();
-  if (!users.length) {
-    console.log(`  ⚠️  Nenhum usuário configurado!\n`);
-  } else {
-    console.log(`  👤 Usuários autorizados (${users.length}):`);
-    for (const u of users) console.log(`     - ${u.user}`);
-    console.log("");
-  }
+// Handler de erro padrão (handlers async que rejeitam caem aqui).
+app.use((err, req, res, next) => {
+  console.error("route error:", err?.message || err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "Erro interno" });
 });
+
+// ---------- Boot ----------
+(async () => {
+  // Atribui runs órfãos (user_id NULL) ao operador principal (isolamento).
+  const primary = process.env.LOGIN_USER || HARDCODED_CLIENTS[0]?.user;
+  let moved = 0;
+  let recovered = 0;
+  try {
+    moved = await backfillRunOwners(primary);
+    recovered = await recoverRunningRuns(); // runs órfãos 'running' → 'paused'
+  } catch (e) {
+    console.error("boot recovery error:", e?.message || e);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`\n  🚀 Disparador Node rodando em http://localhost:${PORT}`);
+    console.log(`  🗄️  Banco: ${dbInfo().backend.toUpperCase()}${dbInfo().backend === "postgres" ? " (Supabase — persiste deploy)" : " (SQLite local — efêmero)"}`);
+    if (isDryRun()) console.log(`  🧪 DRY-RUN ligado (DISPARO_DRY_RUN=1) — não envia de verdade`);
+    if (moved) console.log(`  🔒 ${moved} run(s) legado(s) atribuído(s) a "${primary}"`);
+    if (recovered) console.log(`  ♻️  ${recovered} run(s) órfão(s) 'running' → 'paused' (recuperáveis)`);
+    const users = getConfiguredUsers();
+    if (!users.length) console.log(`  ⚠️  Nenhum usuário configurado!\n`);
+    else {
+      console.log(`  👤 Usuários autorizados (${users.length}):`);
+      for (const u of users) console.log(`     - ${u.user}`);
+      console.log("");
+    }
+  });
+})();
