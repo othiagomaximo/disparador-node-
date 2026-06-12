@@ -19,6 +19,7 @@ import {
   getRunWithAccount,
   getRunResults,
   getDeliveryCounts,
+  getErrorBreakdown,
   updateDeliveryStatusByWamid,
   listAccounts,
   getAccount,
@@ -42,6 +43,7 @@ import {
   cleanPhone,
 } from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
+import { CATEGORIAS } from "./lib/meta-errors.js";
 import {
   startDisparo,
   getUserRuns,
@@ -565,12 +567,25 @@ app.get("/api/disparo/run/:id", wrap(async (req, res) => {
   const user = req.session.user;
   const run = await getRunWithAccount(Number(req.params.id));
   if (!run || run.user_id !== user) return res.status(404).json({ error: "Run não encontrado" });
-  const [counts, results, deliveryCounts] = await Promise.all([
+  const [counts, results, deliveryCounts, rawBreakdown] = await Promise.all([
     countRunRows(run.id),
     getRunResults(run.id),
     getDeliveryCounts(run.id),
+    getErrorBreakdown(run.id),
   ]);
   const live = getRunSnapshot(user, run.id);
+  // PARTE 3: breakdown agrupado das falhas + alerta de limite.
+  const errorBreakdown = rawBreakdown.map((b) => ({
+    categoria: b.categoria,
+    label: (CATEGORIAS[b.categoria] || CATEGORIAS.outro).label,
+    short: (CATEGORIAS[b.categoria] || CATEGORIAS.outro).short,
+    emoji: (CATEGORIAS[b.categoria] || CATEGORIAS.outro).emoji,
+    count: Number(b.c),
+  }));
+  const totalFalhas = errorBreakdown.reduce((s, b) => s + b.count, 0);
+  const limiteCount = errorBreakdown.find((b) => b.categoria === "limite")?.count || 0;
+  const limitAlert =
+    limiteCount >= 20 || (totalFalhas > 0 && limiteCount / totalFalhas >= 0.3);
   res.json({
     run: {
       id: run.id,
@@ -598,6 +613,8 @@ app.get("/api/disparo/run/:id", wrap(async (req, res) => {
     },
     counts,
     deliveryCounts,
+    errorBreakdown,
+    limitAlert: { ativo: limitAlert, limiteCount, totalFalhas },
     results,
   });
 }));
@@ -698,7 +715,7 @@ app.get("/api/runs/:id/download", wrap(async (req, res) => {
   if (!run || run.user_id !== req.session.user) return res.status(404).send("Not found");
   const results = await getRunResults(run.id);
   const lines = ["telefone;status;wamid;motivo;delivery_status;delivery_error;ts"];
-  const clean = (s) => (s || "").replace(/[\r\n;]/g, " ");
+  const clean = (s) => (s || "").replace(/[\r\n;|]/g, " ");
   for (const r of results) {
     lines.push(
       `${r.phone};${r.status};${r.wamid || ""};${clean(r.motivo)};${r.delivery_status || ""};${clean(r.delivery_error)};${r.ts}`
