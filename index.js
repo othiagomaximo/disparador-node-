@@ -33,6 +33,7 @@ import {
   backfillRunOwners,
   recoverRunningRuns,
   dbInfo,
+  dbReady,
 } from "./lib/db.js";
 import {
   normalizePhoneDetailed,
@@ -722,6 +723,13 @@ app.use((err, req, res, next) => {
 
 // ---------- Boot ----------
 (async () => {
+  // Espera o schema do banco ficar pronto (promessa deferida — sem top-level
+  // await em db.js, pra Hostinger/LiteSpeed conseguir require() o index.js).
+  try {
+    await dbReady;
+  } catch (e) {
+    console.error("[boot] db não inicializou:", e?.message || e);
+  }
   // Atribui runs órfãos (user_id NULL) ao operador principal (isolamento).
   const primary = process.env.LOGIN_USER || HARDCODED_CLIENTS[0]?.user;
   let moved = 0;
