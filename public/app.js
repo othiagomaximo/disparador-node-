@@ -704,6 +704,19 @@ async function openReportModal(id) {
     : "";
   // PARTE 4: legenda honesta do "ENVIADO".
   const legend = `<div class="enviado-legend">ℹ️ <b>ENVIADO</b> = aceito pela Meta (não garante entrega no celular; entrega real exigiria webhook).</div>`;
+  // Prompt 28: seção pra baixar os que FALHARAM (só se houver falha). Mini-botões
+  // por categoria quando há mais de uma (failed.csv?cat=).
+  const failedSection =
+    counts.failed > 0
+      ? `<div class="cut-section" style="border-color:var(--error);">
+          <h4 style="margin:0 0 4px; color:var(--error);">⬇ Baixar os que FALHARAM</h4>
+          <p class="muted" style="margin:0 0 8px;">Os que a Meta rejeitou na hora (erro de template, limite, número, etc). Corrija e reimporte numa conta nova.</p>
+          <div class="row" style="flex-wrap:wrap; gap:8px;">
+            <button id="dl-failed" class="primary">⬇ Baixar os que FALHARAM (${counts.failed})</button>
+            ${bk.length > 1 ? bk.map((b) => `<button class="dl-failed-cat ghost" data-cat="${escapeAttr(b.categoria)}" title="${escapeAttr(b.label)}">${b.emoji} ${escapeHtml(b.short)} (${b.count})</button>`).join("") : ""}
+          </div>
+        </div>`
+      : "";
   // Linha de ENTREGA (PARTE 4.4) — read conta como entregue (read ⊃ delivered).
   const dc = deliveryCounts || {};
   const entregues = (dc.delivered || 0) + (dc.read || 0);
@@ -746,6 +759,7 @@ async function openReportModal(id) {
         ${counts.pending > 0 ? '<button id="rep-dl-pending" class="ghost">⬇️ Baixar CSV NÃO disparados</button>' : ""}
         ${run.status === "paused" ? '<button id="rep-continue" class="primary">▶️ Continuar disparo</button>' : ""}
       </div>
+      ${failedSection}
       <div class="cut-section">
         <h4 style="margin:0 0 4px;">✂️ Corte manual / reenviar</h4>
         <p class="muted" style="margin:0 0 8px;">Se a conta entrou no limite no meio e o sistema marcou como <b>ENVIADO</b> mensagens que não saíram de verdade, informe quantos <b>REALMENTE</b> saíram. Você baixa os 2 lados pra continuar numa conta nova.</p>
@@ -767,6 +781,11 @@ async function openReportModal(id) {
   document.getElementById("rep-dl-report")?.addEventListener("click", () => downloadUrl(`/api/runs/${id}/download`));
   document.getElementById("rep-dl-pending")?.addEventListener("click", () => downloadUrl(`/api/disparo/run/${id}/pending.csv`));
   document.getElementById("rep-continue")?.addEventListener("click", () => openPauseModal(id));
+  // ⬇ Baixar os que FALHARAM (todos) + por categoria.
+  document.getElementById("dl-failed")?.addEventListener("click", () => downloadUrl(`/api/disparo/run/${id}/failed.csv`));
+  document.querySelectorAll(".dl-failed-cat").forEach((btn) =>
+    btn.addEventListener("click", () => downloadUrl(`/api/disparo/run/${id}/failed.csv?cat=${encodeURIComponent(btn.dataset.cat)}`))
+  );
   // ✂️ Corte manual: lê N e baixa cada lado. N vazio → backend usa o default.
   const cutVal = () => document.getElementById("cut-n").value.trim();
   const cutValid = (v) => v === "" || (/^\d+$/.test(v) && parseInt(v, 10) >= 1);
