@@ -29,6 +29,7 @@ import {
   deleteAccount,
   listPausedRuns,
   getPendingRows,
+  getFailedRows,
   getAllRunRows,
   countRunRows,
   backfillRunOwners,
@@ -745,6 +746,25 @@ app.get("/api/disparo/run/:id/resend.csv", wrap(async (req, res) => {
   const base = safeFilename(run.csv_filename, run.id);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${base}_reenviar_apos-${cut.n}.csv"`);
+  res.send("\uFEFF" + csv);
+}));
+
+// PARTE 1 (prompt 28) \u2014 Os que FALHARAM (status 'failed'), formato ORIGINAL.
+// ?cat=limite|template|token|numero|param|rede|outro filtra por categoria (prompt 26).
+// Sem ?cat = todos os failed. Sempre 200 (CSV s\u00F3 com header se n\u00E3o houver falhas).
+app.get("/api/disparo/run/:id/failed.csv", wrap(async (req, res) => {
+  const user = req.session.user;
+  const run = await getRun(Number(req.params.id));
+  if (!run || run.user_id !== user) return res.status(404).send("Not found");
+  const cat = req.query.cat ? String(req.query.cat).trim() : null;
+  const headers = safeParse(run.csv_headers, []);
+  const delim = run.csv_delimiter || ",";
+  const rows = (await getFailedRows(run.id, cat)).map((r) => safeParse(r.row_json, {}));
+  const csv = buildDelimitedCsv(headers, rows, delim);
+  const base = safeFilename(run.csv_filename, run.id);
+  const suffix = cat ? `_falharam_${safeFilename(cat, run.id)}` : "_falharam";
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${base}${suffix}.csv"`);
   res.send("\uFEFF" + csv);
 }));
 
