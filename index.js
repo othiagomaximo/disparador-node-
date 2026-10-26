@@ -111,6 +111,7 @@ const HARDCODED_CLIENTS = [
   { user: "cliente1", secret: "Cliente1@2026", isHash: false },
   { user: "cliente2", secret: "Cliente2@2026", isHash: false },
   { user: "cliente3", secret: "Cliente3@2026", isHash: false },
+  { user: "kaua", secret: "Kaua@2026", isHash: false },
 ];
 
 function getConfiguredUsers() {
