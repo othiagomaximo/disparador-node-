@@ -44,7 +44,7 @@ import {
   cleanPhone,
 } from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
-import { CATEGORIAS } from "./lib/meta-errors.js";
+import { CATEGORIAS, DICA_132001, classifyMetaError } from "./lib/meta-errors.js";
 import {
   startDisparo,
   getUserRuns,
@@ -588,6 +588,12 @@ app.get("/api/disparo/run/:id", wrap(async (req, res) => {
   const limiteCount = errorBreakdown.find((b) => b.categoria === "limite")?.count || 0;
   const limitAlert =
     limiteCount >= 20 || (totalFalhas > 0 && limiteCount / totalFalhas >= 0.3);
+  // Prompt 30: dica do erro que pausou (o pause_reason guarda "(cód. Meta N)") e
+  // checklist do 132001 no relatório se alguma linha falhou com esse código.
+  const pauseCode = String(run.pause_reason || "").match(/cód\. Meta (\d+)/)?.[1];
+  const pauseDica = pauseCode ? classifyMetaError({ code: pauseCode }).dica : null;
+  const dica132001 =
+    pauseCode === "132001" || results.some((x) => x.status === "FALHA_132001") ? DICA_132001 : null;
   res.json({
     run: {
       id: run.id,
@@ -602,6 +608,7 @@ app.get("/api/disparo/run/:id", wrap(async (req, res) => {
       pending: counts.pending,
       pauseAt: run.pause_at,
       pauseReason: run.pause_reason,
+      pauseDica,
       filename: run.csv_filename,
       template_name: run.template_name,
       motivo: run.motivo,
@@ -617,6 +624,7 @@ app.get("/api/disparo/run/:id", wrap(async (req, res) => {
     deliveryCounts,
     errorBreakdown,
     limitAlert: { ativo: limitAlert, limiteCount, totalFalhas },
+    dica132001,
     results,
   });
 }));
