@@ -457,7 +457,8 @@ function handleEvt(evt) {
       appendRunLog(rid, numberedLine(rid, "❌", `${evt.phone} → ${evt.label || (evt.code + ": " + evt.message)}`));
       break;
     case "blocked":
-      appendRunLog(rid, `⏸ PAROU: ${evt.label || evt.message}${evt.dica ? " — " + evt.dica : ""}`);
+      // Prompt 30: no log vai a dica curta; a completa (ex.: checklist do 132001) fica no modal de pausa.
+      appendRunLog(rid, `⏸ PAROU: ${evt.label || evt.message}${evt.dicaCurta || evt.dica ? " — " + (evt.dicaCurta || evt.dica) : ""}`);
       break;
     case "resumed":
       appendRunLog(rid, `▶️ retomado`);
@@ -552,6 +553,7 @@ async function renderPauseModal(runId) {
   openModal(`
     <div class="pause-modal">
       <h3>⏸ Disparo pausado em ${run.dispatched} de ${run.total} <span class="muted">${reasonTxt}</span></h3>
+      ${run.pauseDica ? `<div class="erro-dica">💡 ${escapeHtml(run.pauseDica)}</div>` : ""}
       <p>Restam <b>${remaining}</b> leads não disparados${run.apelido ? ` · conta ${escapeHtml((run.icone || "") + " " + run.apelido)}` : ""}.</p>
       <a class="btn-dl" href="/api/disparo/run/${runId}/pending.csv">⬇ Baixar CSV dos NÃO disparados</a>
       <div class="pause-options">
@@ -688,7 +690,7 @@ function downloadUrl(url) {
 // ===== Modal de RELATÓRIO (PARTE 4) =====
 async function openReportModal(id) {
   const r = await fetch(`/api/disparo/run/${id}`);
-  const { run, counts, deliveryCounts, errorBreakdown, limitAlert, results } = await r.json();
+  const { run, counts, deliveryCounts, errorBreakdown, limitAlert, dica132001, results } = await r.json();
   const cor = run.cor || "#8b949e";
   const acc = accLabel(run.apelido, run.icone, run.account_id);
   // PARTE 3.2: breakdown agrupado das falhas (compacto). Só se houver falha.
@@ -751,6 +753,7 @@ async function openReportModal(id) {
         <span class="muted">pendentes: <b>${counts.pending}</b></span>
       </div>
       ${breakdownLine}
+      ${dica132001 ? `<div class="erro-dica">💡 ${escapeHtml(dica132001)}</div>` : ""}
       ${legend}
       ${deliveryLine}
       <div class="row" style="flex-wrap:wrap; gap:8px;">
