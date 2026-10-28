@@ -28,6 +28,11 @@ import {
   updateAccount,
   deleteAccount,
   listPausedRuns,
+  countRunsByTab,
+  setRunArchived,
+  getDayStats,
+  getDailySales,
+  setDailySales,
   getPendingRows,
   getFailedRows,
   getAllRunRows,
@@ -629,6 +634,20 @@ app.get("/api/disparo/run/:id", wrap(async (req, res) => {
   });
 }));
 
+// Prompt 31: arquivar = só OCULTA da lista (recuperável). NUNCA deleta do banco.
+app.post("/api/disparo/run/:id/archive", wrap(async (req, res) => {
+  const user = req.session.user;
+  const id = Number(req.params.id);
+  const run = await getRun(id);
+  if (!run || run.user_id !== user) return res.status(404).json({ error: "Run não encontrada" });
+  if (run.status === "running") {
+    return res.status(409).json({ error: "Disparo rodando — pause ou espere terminar antes de arquivar." });
+  }
+  const archived = req.body?.archived !== false && req.body?.archived !== "false";
+  await setRunArchived(id, user, archived);
+  res.json({ ok: true, id, archived });
+}));
+
 app.post("/api/disparo/run/:id/pause", wrap(async (req, res) => {
   try {
     res.json({ ok: true, snapshot: await pauseRun(req.session.user, Number(req.params.id)) });
@@ -792,8 +811,50 @@ function buildDelimitedCsv(headers, rowsObjs, delimiter) {
 }
 
 // ---------- API: Relatórios ----------
+// Filtros (prompt 31): ?status=completed|paused|aborted|erro &archived=1.
+// Default: NÃO traz arquivados. Com filtro de status o limite sobe (ex.: 79 pausados).
 app.get("/api/runs", wrap(async (req, res) => {
-  res.json(await listRuns(50, req.session.user));
+  const status = String(req.query.status || "");
+  const archived = req.query.archived === "1" || req.query.archived === "true";
+  const limit = status || archived ? 300 : 50;
+  res.json(await listRuns(limit, req.session.user, { status, archived }));
+}));
+
+app.get("/api/runs-counts", wrap(async (req, res) => {
+  res.json(await countRunsByTab(req.session.user));
+}));
+
+// ---------- API: Painel do dia (prompt 31) ----------
+// "Hoje" = data no fuso America/Sao_Paulo, formato YYYY-MM-DD.
+function hojeSP() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+}
+const DIA_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+app.get("/api/painel/hoje", wrap(async (req, res) => {
+  const user = req.session.user;
+  const dia = DIA_RE.test(String(req.query.dia || "")) ? String(req.query.dia) : hojeSP();
+  const [stats, vendas] = await Promise.all([getDayStats(user, dia), getDailySales(user, dia)]);
+  // "entregues" fica null de propósito: só com webhook (fora do escopo do prompt 31).
+  res.json({ dia, hoje: dia === hojeSP(), ...stats, vendas, entregues: null });
+}));
+
+app.post("/api/painel/vendas", wrap(async (req, res) => {
+  const user = req.session.user;
+  const dia = req.body?.dia == null || req.body.dia === "" ? hojeSP() : String(req.body.dia);
+  if (!DIA_RE.test(dia)) return res.status(400).json({ error: "Dia inválido (use AAAA-MM-DD)" });
+  // Aceita número ou string pt-BR ("3.500,00") / en ("3500.00").
+  let raw = req.body?.valor;
+  if (typeof raw === "string") {
+    raw = raw.replace(/[R$\s]/g, "");
+    if (raw.includes(",")) raw = raw.replace(/\./g, "").replace(",", ".");
+  }
+  const valor = Number(raw);
+  if (raw === "" || raw == null || !Number.isFinite(valor) || valor < 0) {
+    return res.status(400).json({ error: "Valor inválido (número maior ou igual a 0)" });
+  }
+  const salvo = await setDailySales(user, dia, Math.round(valor * 100) / 100);
+  res.json({ ok: true, dia, vendas: salvo });
 }));
 
 app.get("/api/runs/:id", wrap(async (req, res) => {

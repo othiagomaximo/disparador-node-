@@ -274,3 +274,45 @@ th { color: var(--muted); background: var(--panel); }
   border-radius: 8px; background: var(--bg);
 }
 .cut-section h4 { color: var(--accent); }
+
+/* ===== Prompt 31: Painel do dia + sub-abas do Relatório ===== */
+.painel-dia {
+  background: linear-gradient(180deg, rgba(37,211,102,.06), transparent 70%), var(--panel);
+  border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+}
+.painel-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.painel-head h2 { margin: 0; font-size: 20px; }
+.painel-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.pcard {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-height: 104px;
+}
+.pcard-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.pcard b { font-size: 28px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.pcard-sub { font-size: 11px; color: var(--muted); }
+.pcard.ok b { color: var(--accent); }
+.pcard.err b { color: var(--error); }
+.pcard.warn b { color: var(--warn); }
+.pcard.dim { opacity: .6; cursor: help; }
+.pcard.money { grid-column: span 2; border-color: rgba(37,211,102,.35); }
+.pcard.money b { color: #f0c94d; }
+.vendas-edit { display: flex; gap: 8px; margin-top: 6px; }
+.vendas-edit input {
+  flex: 1; min-width: 0; padding: 8px 10px; background: var(--panel);
+  border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px;
+}
+.vendas-edit button { padding: 8px 14px; }
+@media (max-width: 520px) { .pcard.money { grid-column: span 1; } }
+
+.sub-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 10px; }
+.sub-tabs button {
+  background: transparent; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+}
+.sub-tabs button:hover { color: var(--text); }
+.sub-tabs button.active { color: var(--accent); border-color: var(--accent); background: rgba(37,211,102,.08); }
+.sub-tabs .cnt { font-size: 11px; opacity: .8; }
+.run-row .row-actions { display: flex; gap: 6px; }
+.run-row .row-actions button { padding: 4px 10px; font-size: 12px; }
+.paused-line { margin: 0 0 12px; font-size: 13px; color: var(--warn); }
+.paused-line a { color: var(--warn); text-decoration: underline; cursor: pointer; }

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=30" />
+  <link rel="stylesheet" href="/style.css?v=31" />
 </head>
 <body>
   <header>
@@ -84,7 +84,7 @@
     <section data-pane="disparo" class="pane">
       <h2>Disparo em massa</h2>
 
-      <div id="paused-banner" class="paused-banner hidden"></div>
+      <div id="paused-banner" class="paused-line hidden"></div>
 
       <div class="row" style="align-items:flex-end;">
         <label style="flex:2;">
@@ -117,8 +117,37 @@
 
     <!-- TAB 4 - RELATÓRIO -->
     <section data-pane="relatorio" class="pane">
-      <h2>Relatórios</h2>
-      <p class="muted">Histórico de disparos. Clica num pra ver detalhes e baixar CSV.</p>
+      <!-- PAINEL DO DIA (prompt 31) -->
+      <div class="painel-dia">
+        <div class="painel-head">
+          <h2 id="painel-titulo">📅 Hoje</h2>
+          <span class="muted">fuso de Brasília · conta pelo dia em que o disparo começou</span>
+        </div>
+        <div class="painel-cards">
+          <div class="pcard ok"><span class="pcard-label">📤 Disparados</span><b id="pd-disparados">—</b><span class="pcard-sub">aceitos pela Meta</span></div>
+          <div class="pcard err"><span class="pcard-label">❌ Falhas</span><b id="pd-falhas">—</b><span class="pcard-sub">rejeitados na hora</span></div>
+          <div class="pcard warn"><span class="pcard-label">⏭️ Pulados</span><b id="pd-pulados">—</b><span class="pcard-sub">já enviados antes</span></div>
+          <div class="pcard dim" title="requer webhook"><span class="pcard-label">📬 Entregues</span><b>—</b><span class="pcard-sub">requer webhook</span></div>
+          <div class="pcard money">
+            <span class="pcard-label">💰 Vendas do dia</span>
+            <b id="pd-vendas">R$ 0,00</b>
+            <div class="vendas-edit">
+              <input id="pd-vendas-input" type="text" inputmode="decimal" placeholder="ex: 3500,00" />
+              <button id="pd-vendas-save" class="primary">Salvar</button>
+            </div>
+            <span class="pcard-sub" id="pd-vendas-msg"></span>
+          </div>
+        </div>
+      </div>
+
+      <h2 style="margin-top:28px;">Disparos</h2>
+      <div class="sub-tabs" id="runs-subtabs">
+        <button data-filter="completed" class="active">✅ Concluídos <span class="cnt" data-cnt="completed"></span></button>
+        <button data-filter="paused">⏸ Pausados <span class="cnt" data-cnt="paused"></span></button>
+        <button data-filter="erro">❌ Com erro <span class="cnt" data-cnt="erro"></span></button>
+        <button data-filter="archived">🗄 Arquivados <span class="cnt" data-cnt="archived"></span></button>
+      </div>
+      <p class="muted" id="runs-subtab-hint">Clica num disparo pra ver detalhes e baixar CSV.</p>
       <div id="runs-list"></div>
     </section>
   </main>
@@ -131,6 +160,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=30"></script>
+  <script src="/app.js?v=31"></script>
 </body>
 </html>
