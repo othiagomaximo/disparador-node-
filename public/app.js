@@ -635,45 +635,69 @@ async function loadActiveRuns() {
 // ----- Painel do dia (prompt 31) -----
 const fmtBRL = (v) => Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const fmtInt = (v) => Number(v || 0).toLocaleString("pt-BR");
+// Prompt 32: o card de vendas é só EXIBIÇÃO (print limpo). A edição é um popup
+// aberto pelo botão discreto no rodapé da aba Relatório.
+let painelAtual = { dia: null, vendas: 0 };
 async function loadPainelDia() {
   try {
     const r = await fetch("/api/painel/hoje");
     const p = await r.json();
-    const [y, m, d] = p.dia.split("-");
+    painelAtual = { dia: p.dia, vendas: Number(p.vendas || 0) };
+    const [, m, d] = p.dia.split("-");
     document.getElementById("painel-titulo").textContent = `📅 Hoje (${d}/${m})`;
     document.getElementById("pd-disparados").textContent = fmtInt(p.disparados);
     document.getElementById("pd-falhas").textContent = fmtInt(p.falhas);
     document.getElementById("pd-pulados").textContent = fmtInt(p.pulados);
     document.getElementById("pd-vendas").textContent = fmtBRL(p.vendas);
-    const inp = document.getElementById("pd-vendas-input");
-    if (document.activeElement !== inp) {
-      inp.value = p.vendas ? Number(p.vendas).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "";
-    }
   } catch (e) {
     console.error("painel do dia:", e);
   }
 }
+function openVendasModal() {
+  const [, m, d] = (painelAtual.dia || "--").split("-");
+  const atual = painelAtual.vendas ? painelAtual.vendas.toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "";
+  openModal(`
+    <div class="vendas-modal">
+      <h3>💰 Vendas do dia${painelAtual.dia ? ` (${d}/${m})` : ""}</h3>
+      <label>Valor (R$)
+        <input id="vm-input" type="text" inputmode="decimal" placeholder="ex: 3500,00" value="${escapeAttr(atual)}" />
+      </label>
+      <p class="hint" id="vm-msg"></p>
+      <div class="row" style="justify-content:flex-end;">
+        <button id="vm-cancel" class="ghost">Cancelar</button>
+        <button id="vm-save" class="primary">Salvar</button>
+      </div>
+    </div>`);
+  const inp = document.getElementById("vm-input");
+  inp.focus();
+  inp.select();
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveVendasDia();
+  });
+  document.getElementById("vm-save").addEventListener("click", saveVendasDia);
+  document.getElementById("vm-cancel").addEventListener("click", closeModal);
+}
 async function saveVendasDia() {
-  const inp = document.getElementById("pd-vendas-input");
-  const msg = document.getElementById("pd-vendas-msg");
+  const inp = document.getElementById("vm-input");
+  const msg = document.getElementById("vm-msg");
   const r = await fetch("/api/painel/vendas", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ valor: inp.value.trim() || "0" }),
+    body: JSON.stringify({ dia: painelAtual.dia, valor: inp.value.trim() || "0" }),
   });
   const j = await r.json();
   if (!r.ok) {
     msg.textContent = "⚠️ " + (j.error || "erro ao salvar");
     return;
   }
+  painelAtual.vendas = Number(j.vendas || 0);
   document.getElementById("pd-vendas").textContent = fmtBRL(j.vendas);
-  inp.value = Number(j.vendas).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
-  msg.textContent = "✅ salvo";
-  setTimeout(() => (msg.textContent = ""), 2500);
+  closeModal();
 }
-document.getElementById("pd-vendas-save").addEventListener("click", saveVendasDia);
-document.getElementById("pd-vendas-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") saveVendasDia();
+document.getElementById("pd-vendas-edit").addEventListener("click", openVendasModal);
+// Esc fecha o popup de vendas (só ele — os outros modais seguem como antes).
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.querySelector(".vendas-modal")) closeModal();
 });
 
 // ----- Sub-abas da lista: Concluídos · Pausados · Com erro · Arquivados -----
