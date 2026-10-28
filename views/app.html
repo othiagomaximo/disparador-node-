@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=31" />
+  <link rel="stylesheet" href="/style.css?v=32" />
 </head>
 <body>
   <header>
@@ -131,11 +131,6 @@
           <div class="pcard money">
             <span class="pcard-label">💰 Vendas do dia</span>
             <b id="pd-vendas">R$ 0,00</b>
-            <div class="vendas-edit">
-              <input id="pd-vendas-input" type="text" inputmode="decimal" placeholder="ex: 3500,00" />
-              <button id="pd-vendas-save" class="primary">Salvar</button>
-            </div>
-            <span class="pcard-sub" id="pd-vendas-msg"></span>
           </div>
         </div>
       </div>
@@ -149,6 +144,11 @@
       </div>
       <p class="muted" id="runs-subtab-hint">Clica num disparo pra ver detalhes e baixar CSV.</p>
       <div id="runs-list"></div>
+
+      <!-- Prompt 32: edição das vendas fica no rodapé (fora da área do print). -->
+      <div class="relatorio-footer">
+        <button id="pd-vendas-edit" class="link-discreto">✏️ Editar vendas do dia</button>
+      </div>
     </section>
   </main>
 
@@ -160,6 +160,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=31"></script>
+  <script src="/app.js?v=32"></script>
 </body>
 </html>
