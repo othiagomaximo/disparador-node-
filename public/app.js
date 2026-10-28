@@ -7,7 +7,10 @@ navBtns.forEach((b) => {
     panes.forEach((p) => p.classList.remove("active"));
     b.classList.add("active");
     document.querySelector(`.pane[data-pane="${b.dataset.tab}"]`).classList.add("active");
-    if (b.dataset.tab === "relatorio") loadRuns();
+    if (b.dataset.tab === "relatorio") {
+      loadPainelDia();
+      loadRuns();
+    }
     if (b.dataset.tab === "disparo") {
       loadAccountsIntoDropdown();
       loadPausedBanner();
@@ -590,6 +593,7 @@ async function renderPauseModal(runId) {
     }
     closeModal();
     loadPausedBanner();
+    refreshRelatorioIfOpen();
   });
   document.getElementById("pause-later").addEventListener("click", () => {
     closeModal();
@@ -597,7 +601,9 @@ async function renderPauseModal(runId) {
   });
 }
 
-// ===== Banner de disparos pausados (sobrevive reload/restart) =====
+// ===== Linha discreta de pausados na tela de Disparo (prompt 31) =====
+// Antes era um banner com 1 botão por run (79 pausados = paredão). Agora é só um
+// aviso com link pra sub-aba "Pausados" do Relatório. Arquivados não contam.
 async function loadPausedBanner() {
   const banner = document.getElementById("paused-banner");
   const r = await fetch("/api/disparo/my-paused-runs");
@@ -608,16 +614,10 @@ async function loadPausedBanner() {
     return;
   }
   banner.classList.remove("hidden");
-  banner.innerHTML =
-    `<b>⏸ Você tem ${paused.length} disparo(s) pausado(s):</b> ` +
-    paused
-      .map(
-        (p) =>
-          `<button class="banner-run" data-id="${p.id}">${escapeHtml((p.acc_icone || "") + " " + (p.acc_apelido || "run"))} #${p.id} — ${p.dispatched}/${p.total} <span class="muted">retomar/ver</span></button>`
-      )
-      .join(" ");
-  banner.querySelectorAll(".banner-run").forEach((b) => {
-    b.addEventListener("click", () => openPauseModal(b.dataset.id));
+  banner.innerHTML = `⏸ ${paused.length} disparo(s) pausado(s) — <a id="go-paused">ver na aba Relatório</a>`;
+  document.getElementById("go-paused").addEventListener("click", () => {
+    runsFilter = "paused";
+    document.querySelector('header nav button[data-tab="relatorio"]').click();
   });
 }
 
@@ -632,12 +632,108 @@ async function loadActiveRuns() {
 }
 
 // ===== Relatórios =====
+// ----- Painel do dia (prompt 31) -----
+const fmtBRL = (v) => Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const fmtInt = (v) => Number(v || 0).toLocaleString("pt-BR");
+async function loadPainelDia() {
+  try {
+    const r = await fetch("/api/painel/hoje");
+    const p = await r.json();
+    const [y, m, d] = p.dia.split("-");
+    document.getElementById("painel-titulo").textContent = `📅 Hoje (${d}/${m})`;
+    document.getElementById("pd-disparados").textContent = fmtInt(p.disparados);
+    document.getElementById("pd-falhas").textContent = fmtInt(p.falhas);
+    document.getElementById("pd-pulados").textContent = fmtInt(p.pulados);
+    document.getElementById("pd-vendas").textContent = fmtBRL(p.vendas);
+    const inp = document.getElementById("pd-vendas-input");
+    if (document.activeElement !== inp) {
+      inp.value = p.vendas ? Number(p.vendas).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "";
+    }
+  } catch (e) {
+    console.error("painel do dia:", e);
+  }
+}
+async function saveVendasDia() {
+  const inp = document.getElementById("pd-vendas-input");
+  const msg = document.getElementById("pd-vendas-msg");
+  const r = await fetch("/api/painel/vendas", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ valor: inp.value.trim() || "0" }),
+  });
+  const j = await r.json();
+  if (!r.ok) {
+    msg.textContent = "⚠️ " + (j.error || "erro ao salvar");
+    return;
+  }
+  document.getElementById("pd-vendas").textContent = fmtBRL(j.vendas);
+  inp.value = Number(j.vendas).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+  msg.textContent = "✅ salvo";
+  setTimeout(() => (msg.textContent = ""), 2500);
+}
+document.getElementById("pd-vendas-save").addEventListener("click", saveVendasDia);
+document.getElementById("pd-vendas-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveVendasDia();
+});
+
+// ----- Sub-abas da lista: Concluídos · Pausados · Com erro · Arquivados -----
+let runsFilter = "completed";
+const SUBTAB_HINT = {
+  completed: "Disparos que terminaram. Clica num pra ver detalhes e baixar CSV.",
+  paused: "Disparos parados no meio. Retome/veja, ou arquive pra tirar da frente (nada é apagado).",
+  erro: "Disparos com pelo menos 1 falha (qualquer status). Abre pra baixar os que falharam.",
+  archived: "Arquivados ficam só escondidos — NADA foi apagado. Desarquive pra voltar pra lista.",
+};
+document.querySelectorAll("#runs-subtabs button").forEach((b) =>
+  b.addEventListener("click", () => {
+    runsFilter = b.dataset.filter;
+    loadRuns();
+  })
+);
+async function loadRunCounts() {
+  try {
+    const c = await (await fetch("/api/runs-counts")).json();
+    document.querySelectorAll("#runs-subtabs .cnt").forEach((el) => {
+      const n = c[el.dataset.cnt] || 0;
+      el.textContent = n ? `(${n})` : "";
+    });
+  } catch (e) {
+    console.error("contadores:", e);
+  }
+}
+async function archiveRun(id, archived) {
+  const r = await fetch(`/api/disparo/run/${id}/archive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived }),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    alert(j.error || "Não deu pra arquivar.");
+    return;
+  }
+  loadRuns();
+  loadPausedBanner();
+}
+
 async function loadRuns() {
-  const r = await fetch("/api/runs");
+  document.querySelectorAll("#runs-subtabs button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.filter === runsFilter)
+  );
+  document.getElementById("runs-subtab-hint").textContent = SUBTAB_HINT[runsFilter] || "";
+  loadRunCounts();
+  const qs = runsFilter === "archived" ? "archived=1" : `status=${runsFilter}`;
+  const r = await fetch(`/api/runs?${qs}`);
   const runs = await r.json();
   const list = document.getElementById("runs-list");
   if (!runs.length) {
-    list.innerHTML = '<p class="muted">Nenhum disparo ainda.</p>';
+    const vazio = {
+      completed: "Nenhum disparo concluído ainda.",
+      paused: "Nenhum disparo pausado. 👌",
+      erro: "Nenhum disparo com falha. 👌",
+      archived: "Nada arquivado.",
+    };
+    list.innerHTML = `<p class="muted">${vazio[runsFilter] || "Nenhum disparo ainda."}</p>`;
     return;
   }
   list.innerHTML = runs
@@ -650,6 +746,17 @@ async function loadRuns() {
           : "";
       // PARTE 3.4: marcador de limite na lista, pra bater o olho.
       const limiteTag = run.limite_cnt > 0 ? `<span class="limite-tag" title="essa conta bateu no limite de mensagens">🚫 limite</span>` : "";
+      // Ações por sub-aba (prompt 31). Running não arquiva (backend também barra).
+      let actions = "";
+      if (runsFilter === "archived") {
+        actions = `<button class="btn-unarchive ghost" data-id="${run.id}">↩️ Desarquivar</button>`;
+      } else if (run.status === "paused") {
+        actions = `<button class="btn-resume" data-id="${run.id}">▶️ Retomar/ver</button>
+          <button class="btn-archive ghost" data-id="${run.id}" title="Some da lista; dá pra recuperar em Arquivados">🗄 Arquivar</button>`;
+      } else if (run.status !== "running") {
+        actions = `<button class="btn-archive ghost" data-id="${run.id}" title="Some da lista; dá pra recuperar em Arquivados">🗄 Arquivar</button>`;
+      }
+      const progresso = run.status === "paused" ? `<span class="muted">${run.dispatched}/${run.total}</span>` : "";
       return `
     <div class="run-row" data-id="${run.id}">
       <span><b>#${run.id}</b></span>
@@ -657,17 +764,21 @@ async function loadRuns() {
       <span class="status-pill ${run.status}">${run.status}</span>
       ${limiteTag}
       <span class="muted">${escapeHtml(fmtTs(run.started_at))}</span>
-      <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
+      ${progresso}
+      <span style="margin-left:auto; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <span>✅ ${run.enviados} · ❌ ${run.falhas} · 📋 ${run.total}</span>
         ${deliv}
-        <button class="btn-row-download" data-id="${run.id}" title="Baixar relatório CSV" style="padding:4px 10px; font-size:12px;">⬇️ Baixar</button>
+        <span class="row-actions">
+          ${actions}
+          <button class="btn-row-download" data-id="${run.id}" title="Baixar relatório CSV">⬇️ Baixar</button>
+        </span>
       </span>
     </div>`;
     })
     .join("");
   list.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest(".btn-row-download")) return;
+      if (e.target.closest(".row-actions")) return;
       openReportModal(row.dataset.id);
     });
   });
@@ -677,6 +788,24 @@ async function loadRuns() {
       downloadUrl(`/api/runs/${btn.dataset.id}/download`);
     });
   });
+  list.querySelectorAll(".btn-resume").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPauseModal(btn.dataset.id);
+    })
+  );
+  list.querySelectorAll(".btn-archive").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      archiveRun(btn.dataset.id, true);
+    })
+  );
+  list.querySelectorAll(".btn-unarchive").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      archiveRun(btn.dataset.id, false);
+    })
+  );
 }
 
 function downloadUrl(url) {
@@ -802,6 +931,13 @@ async function openReportModal(id) {
     if (!cutValid(v)) return alert("Informe um número inteiro maior ou igual a 1.");
     downloadUrl(`/api/disparo/run/${id}/resend.csv${v !== "" ? `?after=${encodeURIComponent(v)}` : ""}`);
   });
+}
+
+function refreshRelatorioIfOpen() {
+  if (document.querySelector('.pane[data-pane="relatorio"]').classList.contains("active")) {
+    loadPainelDia();
+    loadRuns();
+  }
 }
 
 // ===== Init =====
