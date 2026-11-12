@@ -49,6 +49,7 @@ import {
   cleanPhone,
 } from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
+import { registerPhone } from "./lib/cloud-api.js";
 import { CATEGORIAS, DICA_132001, classifyMetaError } from "./lib/meta-errors.js";
 import {
   startDisparo,
@@ -880,6 +881,41 @@ app.get("/api/runs/:id/download", wrap(async (req, res) => {
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="relatorio_run_${run.id}.csv"`);
   res.send(lines.join("\n"));
+}));
+
+// ---------- Ativar número (prompt 33) ----------
+function traduzRegisterErro(r) {
+  const code = Number(r.code);
+  const low = String(r.message || "").toLowerCase();
+  if (code === 190 || code === 10 || code === 200) return "Token inválido ou expirado.";
+  if ((code >= 133000 && code < 134000) || /pin/.test(low))
+    return "PIN incorreto ou two-step diferente — confira o PIN de verificação em duas etapas do número.";
+  if (/already.*regist|already.*active|j[aá] .*regist/.test(low)) return "Esse número já está ativo.";
+  if (code === 100 || code === 33)
+    return "Phone Number ID inválido, ou o token não tem acesso a esse número.";
+  const c = classifyMetaError({ code: r.code, message: r.message });
+  return c.categoria === "outro" ? `Erro Meta ${r.code ?? "?"}: ${r.message}` : `${c.label} — ${c.dica}`;
+}
+
+app.post("/api/registrar-numero", wrap(async (req, res) => {
+  const b = req.body || {};
+  const pin = String(b.pin ?? "").trim();
+  let phoneNumberId = String(b.phoneNumberId ?? "").trim();
+  let token = String(b.token ?? "").trim();
+  if (b.accountId) {
+    const acc = await getAccountForUser(Number(b.accountId), req.session.user);
+    if (!acc) return res.status(404).json({ ok: false, message: "Conta não encontrada." });
+    if (!phoneNumberId) phoneNumberId = String(acc.phone_number_id || "").trim();
+    if (!token) token = String(acc.token || "").trim();
+  }
+  if (!phoneNumberId) return res.status(400).json({ ok: false, message: "Informe o Phone Number ID." });
+  if (!/^\d+$/.test(phoneNumberId)) return res.status(400).json({ ok: false, message: "Phone Number ID deve ter só números." });
+  if (!token) return res.status(400).json({ ok: false, message: "Informe o Access Token." });
+  if (!pin) return res.status(400).json({ ok: false, message: "Informe o PIN." });
+  if (!/^\d{6}$/.test(pin)) return res.status(400).json({ ok: false, message: "O PIN precisa ter exatamente 6 dígitos numéricos." });
+  const r = await registerPhone({ accessToken: token, phoneNumberId, pin });
+  if (r.ok) return res.json({ ok: true, message: "Número ativado com sucesso!" });
+  res.status(400).json({ ok: false, message: traduzRegisterErro(r) });
 }));
 
 // ---------- Health ----------
