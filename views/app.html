@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=32" />
+  <link rel="stylesheet" href="/style.css?v=33" />
 </head>
 <body>
   <header>
@@ -14,6 +14,7 @@
       <button data-tab="csv">2. CSV + Mapear</button>
       <button data-tab="disparo">3. Disparo</button>
       <button data-tab="relatorio">4. Relatório</button>
+      <button data-tab="ativar">5. Ativar nº</button>
       <div style="margin-left:auto; display:flex; gap:8px;">
         <form action="/logout" method="POST" style="margin:0">
           <button type="submit" class="ghost">Sair</button>
@@ -150,6 +151,21 @@
         <button id="pd-vendas-edit" class="link-discreto">✏️ Editar vendas do dia</button>
       </div>
     </section>
+    <!-- TAB 5 - ATIVAR NÚMERO (prompt 33) -->
+    <section data-pane="ativar" class="pane">
+      <h2>Ativar número (pendente → ativo)</h2>
+      <p class="muted">Mesma coisa do <code>/register</code> do Postman: informa o Phone Number ID, o Access Token e o PIN de 6 dígitos.</p>
+      <label>Usar conta salva (opcional)
+        <select id="ativar-conta"></select>
+      </label>
+      <div class="row">
+        <label>Phone Number ID <input id="ativar-phone" autocomplete="off" inputmode="numeric" /></label>
+        <label>Access Token <input id="ativar-token" type="password" autocomplete="new-password" /></label>
+        <label style="max-width:160px;">PIN (6 dígitos) <input id="ativar-pin" type="password" maxlength="6" inputmode="numeric" autocomplete="off" /></label>
+      </div>
+      <button id="ativar-btn" class="primary">▶️ Ativar número</button>
+      <p id="ativar-result" class="ativar-result"></p>
+    </section>
   </main>
 
   <!-- MODAL: detalhes do relatório / pausa -->
@@ -160,6 +176,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=32"></script>
+  <script src="/app.js?v=33"></script>
 </body>
 </html>

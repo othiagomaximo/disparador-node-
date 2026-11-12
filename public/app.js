@@ -11,6 +11,7 @@ navBtns.forEach((b) => {
       loadPainelDia();
       loadRuns();
     }
+    if (b.dataset.tab === "ativar") loadAtivarContas();
     if (b.dataset.tab === "disparo") {
       loadAccountsIntoDropdown();
       loadPausedBanner();
@@ -970,3 +971,64 @@ loadAccounts();
 loadCurrentCSV();
 loadActiveRuns();
 loadPausedBanner();
+
+
+// ===== Ativar número (prompt 33) =====
+async function loadAtivarContas() {
+  try {
+    const r = await fetch("/api/accounts");
+    accountsCache = await r.json();
+  } catch {}
+  const sel = document.getElementById("ativar-conta");
+  sel.innerHTML =
+    '<option value="">— digitar manualmente —</option>' +
+    accountsCache
+      .filter((a) => a.has_token)
+      .map((a) => `<option value="${a.id}">${escapeHtml((a.icone || "") + " " + a.apelido)}</option>`)
+      .join("");
+}
+document.getElementById("ativar-conta").addEventListener("change", (e) => {
+  const a = accountsCache.find((x) => String(x.id) === e.target.value);
+  const tk = document.getElementById("ativar-token");
+  if (a) {
+    document.getElementById("ativar-phone").value = a.phone_number_id || "";
+    tk.value = "";
+    tk.placeholder = "usando o token da conta salva";
+  } else tk.placeholder = "";
+});
+document.getElementById("ativar-btn").addEventListener("click", async () => {
+  const out = document.getElementById("ativar-result");
+  const btn = document.getElementById("ativar-btn");
+  const accountId = document.getElementById("ativar-conta").value;
+  const body = {
+    phoneNumberId: document.getElementById("ativar-phone").value.trim(),
+    token: document.getElementById("ativar-token").value.trim(),
+    pin: document.getElementById("ativar-pin").value.trim(),
+  };
+  if (accountId) body.accountId = Number(accountId);
+  btn.disabled = true;
+  out.style.color = "";
+  out.textContent = "Ativando…";
+  try {
+    const r = await fetch("/api/registrar-numero", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (j.ok) {
+      out.style.color = "var(--accent)";
+      out.textContent = "✅ " + (j.message || "Número ativado com sucesso!");
+      document.getElementById("ativar-pin").value = "";
+      document.getElementById("ativar-token").value = "";
+    } else {
+      out.style.color = "var(--error)";
+      out.textContent = "❌ " + (j.message || j.error || "Erro ao ativar");
+    }
+  } catch (e) {
+    out.style.color = "var(--error)";
+    out.textContent = "❌ Falha de conexão com o servidor.";
+  } finally {
+    btn.disabled = false;
+  }
+});
