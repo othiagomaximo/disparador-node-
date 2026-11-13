@@ -52,6 +52,25 @@ function fmtTs(ts) {
   return d.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
+// ===== Toast reutilizável (canto inferior direito, some em ~3s) =====
+function toast(msg, type = "ok", ms = 3000) {
+  let box = document.getElementById("toast-box");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "toast-box";
+    document.body.appendChild(box);
+  }
+  const t = document.createElement("div");
+  t.className = "toast " + (type === "err" ? "err" : "ok");
+  t.textContent = msg;
+  box.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("show"));
+  setTimeout(() => {
+    t.classList.remove("show");
+    setTimeout(() => t.remove(), 300);
+  }, ms);
+}
+
 // ===== Config: Template =====
 async function loadConfig() {
   const r = await fetch("/api/config");
@@ -112,7 +131,7 @@ function accountCardHtml(a) {
       ${a.ativa ? '<span class="badge-ativa">ativa</span>' : ""}
       <span class="head-actions">
         ${a.id && !a.ativa ? '<button class="acc-use small ghost">Usar</button>' : ""}
-        ${a.id ? '<button class="acc-delete icon-btn" title="Apagar">🗑</button>' : ""}
+        ${a.id ? '<button class="acc-delete btn-excluir">🗑 Excluir conta</button>' : ""}
       </span>
     </div>
     <div class="row">
@@ -125,7 +144,7 @@ function accountCardHtml(a) {
       <label>Phone Number ID <input class="acc-phone_number_id" value="${escapeAttr(a.phone_number_id || "")}" placeholder="15 dígitos" /></label>
       <label>WABA ID <input class="acc-waba_id" value="${escapeAttr(a.waba_id || "")}" placeholder="opcional" /></label>
     </div>
-    <label>Access Token ${a.has_token ? '<span class="muted">(salvo — deixe em branco pra manter)</span>' : ""}<textarea class="acc-token" rows="2" placeholder="${a.has_token ? "•••••••• preenchido" : "EAA..."}"></textarea></label>
+    <label>Access Token ${a.has_token ? '<span class="muted">(salvo — deixe em branco pra manter)</span>' : ""}<span class="token-wrap"><textarea class="acc-token masked" rows="2" autocomplete="off" spellcheck="false" placeholder="${a.has_token ? "•••••••• preenchido" : "EAA..."}"></textarea><button type="button" class="acc-eye eye-btn" title="Mostrar/ocultar token" aria-label="Mostrar token">👁</button></span></label>
     <div class="row">
       <label>Template desta conta <input class="acc-template_name" value="${escapeAttr(a.template_name || "")}" placeholder="vazio = usa o template global" /></label>
       <label style="max-width:140px;">Idioma <input class="acc-language" value="${escapeAttr(a.language || "")}" placeholder="pt_BR" /></label>
@@ -166,6 +185,13 @@ function bindAccountCards() {
 function bindAccountCard(card) {
   const get = (cls) => card.querySelector("." + cls);
     const msg = get("acc-msg");
+    get("acc-eye")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      const tk = get("acc-token");
+      const show = tk.classList.toggle("masked") === false;
+      e.currentTarget.textContent = show ? "🙈" : "👁";
+      e.currentTarget.setAttribute("aria-label", show ? "Ocultar token" : "Mostrar token");
+    });
     get("acc-save")?.addEventListener("click", async () => {
       const body = {
         id: card.dataset.id || null,
@@ -180,8 +206,7 @@ function bindAccountCard(card) {
         language: get("acc-language").value.trim(),
       };
       if (!body.apelido) {
-        msg.textContent = "Apelido é obrigatório";
-        msg.style.color = "var(--error)";
+        toast("⚠️ Apelido é obrigatório", "err");
         return;
       }
       const r = await fetch("/api/accounts", {
@@ -191,11 +216,11 @@ function bindAccountCard(card) {
       });
       const j = await r.json();
       if (!r.ok) {
-        msg.textContent = j.error || "Erro";
-        msg.style.color = "var(--error)";
+        toast("⚠️ " + (j.error || "Erro ao salvar"), "err");
         return;
       }
       await loadAccounts();
+      toast("✅ Conta salva");
     });
     get("acc-delete")?.addEventListener("click", async () => {
       if (accountsCache.length <= 1) return alert("Não dá pra apagar a única conta. Adicione outra antes.");
@@ -226,7 +251,7 @@ function bindAccountCard(card) {
       };
       btn.disabled = true;
       out.style.color = "";
-      out.textContent = "Ativando…";
+      out.innerHTML = 'Ativando<span class="dots"><i>.</i><i>.</i><i>.</i></span>';
       try {
         const r = await fetch("/api/registrar-numero", {
           method: "POST",
@@ -355,6 +380,16 @@ function reindexVars() {
     row.querySelector("b").textContent = `{{${i + 1}}}`;
   });
 }
+
+document.getElementById("confirm-map")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  // Puramente ilustrativo: feedback tranquilizador, sem request e sem alterar estado.
+  const m = document.getElementById("confirm-map-msg");
+  m.textContent = "✅ Mapeamento confirmado! Pode ir pro Disparo 🚀";
+  m.classList.add("show");
+  clearTimeout(window.__cmTimer);
+  window.__cmTimer = setTimeout(() => m.classList.remove("show"), 4000);
+});
 
 document.getElementById("add-var").addEventListener("click", (e) => {
   e.preventDefault();
