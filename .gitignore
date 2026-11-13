@@ -7,3 +7,4 @@ data/
 .DS_Store
 uploads/
 sessions.db
+.playwright-mcp/
