@@ -603,12 +603,6 @@ document.getElementById("btn-start").addEventListener("click", async () => {
   const pauseAt = pauseAtRaw ? parseInt(pauseAtRaw, 10) : null;
   if (!accountId) return alert("Escolha a conta WhatsApp pra disparar (aba 1 pra cadastrar).");
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
-  const acc = accountsCache.find((a) => String(a.id) === accountId);
-  let msg = `Iniciar disparo pela conta "${acc?.apelido || accountId}"?\n\n`;
-  msg += pauseAt ? `Vai pausar automaticamente após ${pauseAt} disparos.\n` : "";
-  msg += "Dispara a lista inteira, linha por linha (repetidos e já enviados também).";
-  if (!confirm(msg)) return;
-
   const r = await fetch("/api/disparo/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
