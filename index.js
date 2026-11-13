@@ -217,6 +217,8 @@ app.get("/", (req, res) => {
   res.sendFile(join(__dirname, "views", "app.html"));
 });
 
+app.get("/api/me", (req, res) => res.json({ user: req.session.user }));
+
 // ---------- API: Config (template/idioma globais = FALLBACK; threads) ----------
 app.get("/api/config", wrap(async (req, res) => {
   const cfg = await getAllConfig();
@@ -277,13 +279,32 @@ function validateAccount(body) {
   };
 }
 
+// Conta ATIVA do usuário (prompt 35): guardada em config `active_account_<user>`.
+// Se não houver (ou a conta sumiu), cai na primeira conta.
+async function resolveActiveId(user, accounts) {
+  const saved = Number(await getConfig(`active_account_${user}`));
+  if (saved && accounts.some((a) => a.id === saved)) return saved;
+  return accounts[0]?.id ?? null;
+}
+
 app.get("/api/accounts", wrap(async (req, res) => {
   // NUNCA devolve o token Meta — só has_token. Editar sem redigitar preserva.
-  const accounts = (await ensureAccountsForUser(req.session.user)).map(({ token, ...a }) => ({
+  const raw = await ensureAccountsForUser(req.session.user);
+  const activeId = await resolveActiveId(req.session.user, raw);
+  const accounts = raw.map(({ token, ...a }) => ({
     ...a,
     has_token: !!token,
+    ativa: a.id === activeId,
   }));
   res.json(accounts);
+}));
+
+app.post("/api/accounts/:id/usar", wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const acc = await getAccountForUser(id, req.session.user);
+  if (!acc) return res.status(404).json({ error: "Conta não encontrada" });
+  await setConfig(`active_account_${req.session.user}`, String(id));
+  res.json({ ok: true, id });
 }));
 
 app.post("/api/accounts", wrap(async (req, res) => {
@@ -300,6 +321,8 @@ app.post("/api/accounts", wrap(async (req, res) => {
 }));
 
 app.delete("/api/accounts/:id", wrap(async (req, res) => {
+  const mine = await listAccounts(req.session.user);
+  if (mine.length <= 1) return res.status(400).json({ error: "Não dá pra apagar a única conta. Adicione outra antes." });
   const ok = await deleteAccount(Number(req.params.id), req.session.user);
   if (!ok) return res.status(404).json({ error: "Conta não encontrada" });
   res.json({ ok: true });
@@ -477,7 +500,7 @@ app.post("/api/disparo/start", wrap(async (req, res) => {
   const buf = getBuf(req);
   if (!buf) return res.status(400).json({ error: "Suba o CSV primeiro" });
 
-  const { phoneCol, varCols, skipDuplicates, accountId, pauseAt } = req.body || {};
+  const { phoneCol, varCols, accountId, pauseAt } = req.body || {};
   if (!accountId) return res.status(400).json({ error: "Escolha a conta WhatsApp pra disparar" });
   const account = await getAccountForUser(Number(accountId), user);
   if (!account) return res.status(400).json({ error: "Conta inválida" });
@@ -490,7 +513,7 @@ app.post("/api/disparo/start", wrap(async (req, res) => {
     return res.status(400).json({ error: `Defina um template na conta "${account.apelido}" ou no template global (aba 1)` });
   }
   if (!phoneCol) return res.status(400).json({ error: "Mapeie a coluna do telefone" });
-  const skip = skipDuplicates === undefined || skipDuplicates === null ? true : !!skipDuplicates;
+  const skip = false; // prompt 35: dedupe removida
 
   if (buf.phoneCol !== phoneCol) applyNormalization(buf, phoneCol);
 
