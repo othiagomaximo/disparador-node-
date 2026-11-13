@@ -595,7 +595,13 @@ function handleEvt(evt) {
   }
 }
 
-document.getElementById("btn-start").addEventListener("click", async () => {
+// Trava de reentrada (prompt 38): 1 clique = 1 run. Sem o confirm() do prompt 37,
+// um duplo clique rápido chamava o start 2x. A flag é síncrona (antes de qualquer await).
+window.__disparando = false;
+const btnStart = document.getElementById("btn-start");
+const btnStartLabel = btnStart.textContent;
+btnStart.addEventListener("click", async () => {
+  if (window.__disparando) return;
   const accountId = document.getElementById("disparo-account").value;
   const phoneCol = document.getElementById("phone-col").value;
   const varCols = Array.from(document.querySelectorAll("#var-cols .var-row select")).map((s) => s.value);
@@ -603,16 +609,28 @@ document.getElementById("btn-start").addEventListener("click", async () => {
   const pauseAt = pauseAtRaw ? parseInt(pauseAtRaw, 10) : null;
   if (!accountId) return alert("Escolha a conta WhatsApp pra disparar (aba 1 pra cadastrar).");
   if (!phoneCol) return alert("Mapeie a coluna de telefone na aba 2");
-  const r = await fetch("/api/disparo/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ accountId, phoneCol, varCols, pauseAt }),
-  });
-  const j = await r.json();
-  if (!r.ok) return alert(j.error || "Erro");
-  ensureCard(j.snapshot);
-  appendRunLog(j.runId, `Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados)${j.pauseAt ? ` · pausa em ${j.pauseAt}` : ""}`);
-  attachSSE();
+
+  window.__disparando = true;
+  btnStart.disabled = true;
+  btnStart.textContent = "Iniciando...";
+  try {
+    const r = await fetch("/api/disparo/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId, phoneCol, varCols, pauseAt }),
+    });
+    const j = await r.json();
+    if (!r.ok) return alert(j.error || "Erro");
+    ensureCard(j.snapshot);
+    appendRunLog(j.runId, `Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados)${j.pauseAt ? ` · pausa em ${j.pauseAt}` : ""}`);
+    attachSSE();
+  } catch (e) {
+    alert("Erro ao iniciar o disparo: " + e.message);
+  } finally {
+    window.__disparando = false;
+    btnStart.disabled = false;
+    btnStart.textContent = btnStartLabel;
+  }
 });
 
 async function pauseRunUi(runId) {
