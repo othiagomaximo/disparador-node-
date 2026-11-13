@@ -1,17 +1,27 @@
-// ===== Tabs =====
-const navBtns = document.querySelectorAll("header nav button[data-tab]");
+// ===== Tabs (sidebar vertical) =====
+const navBtns = document.querySelectorAll(".sidebar .nav-item[data-tab]");
 const panes = document.querySelectorAll(".pane");
+const TAB_TITLES = {
+  config: ["Configuração", "Contas do WhatsApp Cloud API"],
+  csv: ["CSV + Mapear", "Importe a lista e mapeie as colunas"],
+  disparo: ["Disparo", "Acompanhe o envio ao vivo"],
+  relatorio: ["Relatório", "Painel do dia e histórico"],
+};
 navBtns.forEach((b) => {
   b.addEventListener("click", () => {
     navBtns.forEach((x) => x.classList.remove("active"));
     panes.forEach((p) => p.classList.remove("active"));
     b.classList.add("active");
     document.querySelector(`.pane[data-pane="${b.dataset.tab}"]`).classList.add("active");
+    const t = TAB_TITLES[b.dataset.tab];
+    if (t) {
+      document.getElementById("pg-title").textContent = t[0];
+      document.getElementById("pg-sub").textContent = t[1];
+    }
     if (b.dataset.tab === "relatorio") {
       loadPainelDia();
       loadRuns();
     }
-    if (b.dataset.tab === "ativar") loadAtivarContas();
     if (b.dataset.tab === "disparo") {
       loadAccountsIntoDropdown();
       loadPausedBanner();
@@ -81,17 +91,29 @@ async function loadAccounts() {
   const r = await fetch("/api/accounts");
   accountsCache = await r.json();
   renderAccounts();
+  updateActivePill();
   loadAccountsIntoDropdown();
+}
+
+// Status pill do topo: "Conta ativa · <nome>"
+function updateActivePill() {
+  const a = accountsCache.find((x) => x.ativa) || accountsCache[0];
+  document.getElementById("pill-acc").textContent = a ? a.apelido : "nenhuma";
 }
 
 function accountCardHtml(a) {
   const id = a.id || "";
   const cor = a.cor || "#25D366";
   return `
-  <div class="account-card" data-id="${id}">
+  <div class="account-card${a.ativa ? " active" : ""}" data-id="${id}">
     <div class="account-head">
       <span class="account-swatch" style="background:${escapeAttr(cor)}"></span>
       <b>${a.id ? escapeHtml((a.icone || "") + " " + a.apelido) : "Nova conta"}</b>
+      ${a.ativa ? '<span class="badge-ativa">ativa</span>' : ""}
+      <span class="head-actions">
+        ${a.id && !a.ativa ? '<button class="acc-use small ghost">Usar</button>' : ""}
+        ${a.id ? '<button class="acc-delete icon-btn" title="Apagar">🗑</button>' : ""}
+      </span>
     </div>
     <div class="row">
       <label>Apelido * <input class="acc-apelido" maxlength="60" value="${escapeAttr(a.apelido || "")}" placeholder="ex: Lourrany Beleza" /></label>
@@ -108,18 +130,27 @@ function accountCardHtml(a) {
       <label>Template desta conta <input class="acc-template_name" value="${escapeAttr(a.template_name || "")}" placeholder="vazio = usa o template global" /></label>
       <label style="max-width:140px;">Idioma <input class="acc-language" value="${escapeAttr(a.language || "")}" placeholder="pt_BR" /></label>
     </div>
-    <div class="row">
+    <div class="row btn-row">
       <button class="acc-save primary">💾 Salvar conta</button>
-      ${a.id ? '<button class="acc-delete danger">🗑 Remover</button>' : '<button class="acc-cancel ghost">Cancelar</button>'}
+      ${a.id ? '<button class="acc-ativar ghost">📲 Ativar número</button>' : '<button class="acc-cancel ghost">Cancelar</button>'}
       <span class="acc-msg hint"></span>
     </div>
+    ${a.id ? `<div class="ativar-box"><div class="ativar-inner">
+      <div class="ativar-ttl">📲 Ativar número (pendente → ativo)</div>
+      <div class="hint" style="margin-bottom:12px">Usa o Phone Number ID e o Access Token deste formulário (ou o token salvo). Informe só o PIN de 6 dígitos.</div>
+      <div class="row" style="align-items:flex-end">
+        <label style="flex:0 0 170px;min-width:150px;margin:0;">PIN (6 dígitos)<input class="acc-pin" type="password" maxlength="6" inputmode="numeric" autocomplete="off" /></label>
+        <button class="acc-registrar primary">Registrar número</button>
+      </div>
+      <p class="ativar-result"></p>
+    </div></div>` : ""}
   </div>`;
 }
 
 function renderAccounts() {
   const list = document.getElementById("accounts-list");
   if (!accountsCache.length) {
-    list.innerHTML = '<p class="muted">Nenhuma conta cadastrada ainda. Clique em "+ Adicionar conta WhatsApp".</p>';
+    list.innerHTML = '<p class="muted">Nenhuma conta cadastrada ainda. Clique em "➕ Adicionar conta".</p>';
   } else {
     list.innerHTML = accountsCache.map(accountCardHtml).join("");
   }
@@ -167,10 +198,56 @@ function bindAccountCard(card) {
       await loadAccounts();
     });
     get("acc-delete")?.addEventListener("click", async () => {
-      if (!confirm(`Remover a conta "${get("acc-apelido").value}"? Disparos pausados nessa conta não poderão ser retomados.`)) return;
+      if (accountsCache.length <= 1) return alert("Não dá pra apagar a única conta. Adicione outra antes.");
+      if (!confirm(`Apagar a conta "${get("acc-apelido").value}"? Disparos pausados nessa conta não poderão ser retomados.`)) return;
       const r = await fetch(`/api/accounts/${card.dataset.id}`, { method: "DELETE" });
       if (r.ok) await loadAccounts();
-      else alert("Erro ao remover");
+      else {
+        const j = await r.json().catch(() => ({}));
+        alert(j.error || "Erro ao apagar");
+      }
+    });
+    get("acc-use")?.addEventListener("click", async () => {
+      const r = await fetch(`/api/accounts/${card.dataset.id}/usar`, { method: "POST" });
+      if (!r.ok) return alert("Erro ao trocar a conta ativa");
+      await loadAccounts();
+      const sel = document.getElementById("disparo-account");
+      if (sel) sel.value = card.dataset.id;
+    });
+    get("acc-ativar")?.addEventListener("click", () => card.querySelector(".ativar-box").classList.toggle("open"));
+    get("acc-registrar")?.addEventListener("click", async () => {
+      const out = card.querySelector(".ativar-result");
+      const btn = get("acc-registrar");
+      const body = {
+        accountId: Number(card.dataset.id),
+        phoneNumberId: get("acc-phone_number_id").value.trim(),
+        token: get("acc-token").value.trim(),
+        pin: get("acc-pin").value.trim(),
+      };
+      btn.disabled = true;
+      out.style.color = "";
+      out.textContent = "Ativando…";
+      try {
+        const r = await fetch("/api/registrar-numero", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (j.ok) {
+          out.style.color = "var(--accent)";
+          out.textContent = "✅ " + (j.message || "Número ativado com sucesso!");
+          get("acc-pin").value = "";
+        } else {
+          out.style.color = "var(--error)";
+          out.textContent = "❌ " + (j.message || j.error || "Erro ao ativar");
+        }
+      } catch {
+        out.style.color = "var(--error)";
+        out.textContent = "❌ Falha de conexão com o servidor.";
+      } finally {
+        btn.disabled = false;
+      }
     });
     get("acc-cancel")?.addEventListener("click", () => renderAccounts());
 }
@@ -341,7 +418,10 @@ async function loadAccountsIntoDropdown() {
   sel.innerHTML = accountsCache
     .map((a) => `<option value="${a.id}">${escapeHtml((a.icone || "") + " " + a.apelido)}</option>`)
     .join("");
+  const ativa = accountsCache.find((a) => a.ativa);
   if (prev && accountsCache.find((a) => String(a.id) === prev)) sel.value = prev;
+  else if (ativa) sel.value = String(ativa.id);
+  updateActivePill();
   // Se só 1 conta, pré-seleciona (já é o único option).
 }
 
@@ -484,7 +564,6 @@ document.getElementById("btn-start").addEventListener("click", async () => {
   const accountId = document.getElementById("disparo-account").value;
   const phoneCol = document.getElementById("phone-col").value;
   const varCols = Array.from(document.querySelectorAll("#var-cols .var-row select")).map((s) => s.value);
-  const skipDuplicates = document.getElementById("chk-skip-duplicates").checked;
   const pauseAtRaw = document.getElementById("disparo-pauseat").value.trim();
   const pauseAt = pauseAtRaw ? parseInt(pauseAtRaw, 10) : null;
   if (!accountId) return alert("Escolha a conta WhatsApp pra disparar (aba 1 pra cadastrar).");
@@ -492,18 +571,18 @@ document.getElementById("btn-start").addEventListener("click", async () => {
   const acc = accountsCache.find((a) => String(a.id) === accountId);
   let msg = `Iniciar disparo pela conta "${acc?.apelido || accountId}"?\n\n`;
   msg += pauseAt ? `Vai pausar automaticamente após ${pauseAt} disparos.\n` : "";
-  msg += skipDuplicates ? "Duplicados serão pulados." : "⚠️ Pular duplicados DESMARCADO — quem já recebeu vai receber DE NOVO.";
+  msg += "Dispara a lista inteira, linha por linha (repetidos e já enviados também).";
   if (!confirm(msg)) return;
 
   const r = await fetch("/api/disparo/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ accountId, phoneCol, varCols, skipDuplicates, pauseAt }),
+    body: JSON.stringify({ accountId, phoneCol, varCols, pauseAt }),
   });
   const j = await r.json();
   if (!r.ok) return alert(j.error || "Erro");
   ensureCard(j.snapshot);
-  appendRunLog(j.runId, `Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados) · ${j.skipDuplicates ? "dedupe ON" : "dedupe OFF"}${j.pauseAt ? ` · pausa em ${j.pauseAt}` : ""}`);
+  appendRunLog(j.runId, `Disparo iniciado · run #${j.runId} · ${j.total} leads (${j.invalidos} inválidos descartados)${j.pauseAt ? ` · pausa em ${j.pauseAt}` : ""}`);
   attachSSE();
 });
 
@@ -618,7 +697,7 @@ async function loadPausedBanner() {
   banner.innerHTML = `⏸ ${paused.length} disparo(s) pausado(s) — <a id="go-paused">ver na aba Relatório</a>`;
   document.getElementById("go-paused").addEventListener("click", () => {
     runsFilter = "paused";
-    document.querySelector('header nav button[data-tab="relatorio"]').click();
+    document.querySelector('.sidebar .nav-item[data-tab="relatorio"]').click();
   });
 }
 
@@ -972,63 +1051,8 @@ loadCurrentCSV();
 loadActiveRuns();
 loadPausedBanner();
 
-
-// ===== Ativar número (prompt 33) =====
-async function loadAtivarContas() {
-  try {
-    const r = await fetch("/api/accounts");
-    accountsCache = await r.json();
-  } catch {}
-  const sel = document.getElementById("ativar-conta");
-  sel.innerHTML =
-    '<option value="">— digitar manualmente —</option>' +
-    accountsCache
-      .filter((a) => a.has_token)
-      .map((a) => `<option value="${a.id}">${escapeHtml((a.icone || "") + " " + a.apelido)}</option>`)
-      .join("");
-}
-document.getElementById("ativar-conta").addEventListener("change", (e) => {
-  const a = accountsCache.find((x) => String(x.id) === e.target.value);
-  const tk = document.getElementById("ativar-token");
-  if (a) {
-    document.getElementById("ativar-phone").value = a.phone_number_id || "";
-    tk.value = "";
-    tk.placeholder = "usando o token da conta salva";
-  } else tk.placeholder = "";
-});
-document.getElementById("ativar-btn").addEventListener("click", async () => {
-  const out = document.getElementById("ativar-result");
-  const btn = document.getElementById("ativar-btn");
-  const accountId = document.getElementById("ativar-conta").value;
-  const body = {
-    phoneNumberId: document.getElementById("ativar-phone").value.trim(),
-    token: document.getElementById("ativar-token").value.trim(),
-    pin: document.getElementById("ativar-pin").value.trim(),
-  };
-  if (accountId) body.accountId = Number(accountId);
-  btn.disabled = true;
-  out.style.color = "";
-  out.textContent = "Ativando…";
-  try {
-    const r = await fetch("/api/registrar-numero", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (j.ok) {
-      out.style.color = "var(--accent)";
-      out.textContent = "✅ " + (j.message || "Número ativado com sucesso!");
-      document.getElementById("ativar-pin").value = "";
-      document.getElementById("ativar-token").value = "";
-    } else {
-      out.style.color = "var(--error)";
-      out.textContent = "❌ " + (j.message || j.error || "Erro ao ativar");
-    }
-  } catch (e) {
-    out.style.color = "var(--error)";
-    out.textContent = "❌ Falha de conexão com o servidor.";
-  } finally {
-    btn.disabled = false;
-  }
-});
+// Usuário logado na sidebar
+fetch("/api/me").then((r) => r.json()).then((j) => {
+  document.getElementById("user-name").textContent = j.user || "—";
+  document.getElementById("user-av").textContent = (j.user || "?")[0].toUpperCase();
+}).catch(() => {});
