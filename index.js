@@ -495,6 +495,8 @@ app.get("/api/disparo/preview-first", wrap(async (req, res) => {
   res.json({ phone, template_name: template_name || null, language, variables });
 }));
 
+const RECENT_STARTS = new Map(); // chave do start → { ts, promise }
+
 app.post("/api/disparo/start", wrap(async (req, res) => {
   const user = req.session.user;
   const buf = getBuf(req);
@@ -535,7 +537,20 @@ app.post("/api/disparo/start", wrap(async (req, res) => {
   const pauseAtVal = Number.isFinite(paNum) && paNum > 0 ? paNum : null;
   const cfg = await getAllConfig();
 
+  // Proteção extra (prompt 38): mesmo usuário+conta+lista iniciando de novo em <8s
+  // (clique duplo / retry) devolve o MESMO run em vez de criar outro.
+  const dupKey = `${user}|${account.id}|${buf.filename}|${leads.length}|${pauseAtVal || ""}`;
+  const recent = RECENT_STARTS.get(dupKey);
+  const recentActive = recent && (!recent.done || getUserRuns(user).some((r) => r.runId === recent.runId && r.status === "running"));
+  if (recent && Date.now() - recent.ts < 8000 && recentActive) {
+    try {
+      return res.json({ ...(await recent.promise), duplicate: true });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  }
   try {
+    const startP = (async () => {
     const { runId, snapshot } = await startDisparo(leads, {
       userId: user,
       account: {
@@ -558,8 +573,16 @@ app.post("/api/disparo/start", wrap(async (req, res) => {
       csvDelimiter: buf.delimiter || ",",
       varCols: varCols || [],
     });
-    res.json({ ok: true, runId, total: leads.length, invalidos, skipDuplicates: skip, pauseAt: pauseAtVal, snapshot });
+    return { ok: true, runId, total: leads.length, invalidos, skipDuplicates: skip, pauseAt: pauseAtVal, snapshot };
+    })();
+    const entry = { ts: Date.now(), promise: startP, done: false, runId: null };
+    RECENT_STARTS.set(dupKey, entry);
+    const out = await startP;
+    entry.done = true;
+    entry.runId = out.runId;
+    res.json(out);
   } catch (e) {
+    RECENT_STARTS.delete(dupKey);
     res.status(400).json({ error: e.message });
   }
 }));
