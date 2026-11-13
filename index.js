@@ -5,7 +5,7 @@ import createMemoryStore from "memorystore";
 import multer from "multer";
 import bcrypt from "bcryptjs";
 import { parse } from "csv-parse/sync";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
@@ -49,7 +49,7 @@ import {
   cleanPhone,
 } from "./lib/normalize.js";
 import { requireAuth } from "./lib/auth-middleware.js";
-import { registerPhone } from "./lib/cloud-api.js";
+import { registerPhone, uploadMedia } from "./lib/cloud-api.js";
 import { CATEGORIAS, DICA_132001, classifyMetaError } from "./lib/meta-errors.js";
 import {
   startDisparo,
@@ -495,6 +495,81 @@ app.get("/api/disparo/preview-first", wrap(async (req, res) => {
   res.json({ phone, template_name: template_name || null, language, variables });
 }));
 
+// ---------- Prompt 39: imagem do template (header image, FIXA pra todos os leads) ----------
+// Guardamos o ARQUIVO (pasta uploads/, fora do git) por usuário; o media_id é gerado
+// no início de cada run, pela conta que vai disparar (media_id é preso ao phone_number_id).
+const IMAGENS = new Map(); // user → { path, mime, name, size }
+const imgUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const IMG_MAX = 5 * 1024 * 1024;
+function detectImageMime(b) {
+  if (b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  return null;
+}
+const imgPath = (user, mime) =>
+  join(__dirname, "uploads", `img-${String(user).replace(/[^a-zA-Z0-9_-]/g, "_")}.${mime === "image/png" ? "png" : "jpg"}`);
+function clearImagem(user) {
+  const cur = IMAGENS.get(user);
+  if (cur) {
+    try { unlinkSync(cur.path); } catch {}
+    IMAGENS.delete(user);
+  }
+}
+
+app.post("/api/disparo/imagem", (req, res, next) => {
+  imgUpload.single("image")(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ ok: false, error: err.code === "LIMIT_FILE_SIZE" ? "❌ Imagem maior que 5 MB. Reduza." : "❌ Falha no upload: " + err.message });
+    }
+    next();
+  });
+}, wrap(async (req, res) => {
+  const user = req.session.user;
+  const f = req.file;
+  if (!f) return res.status(400).json({ ok: false, error: "❌ Escolha um arquivo de imagem" });
+  // a) validação LOCAL
+  const ext = (f.originalname.split(".").pop() || "").toLowerCase();
+  const mime = detectImageMime(f.buffer);
+  if (!mime || !["jpg", "jpeg", "png"].includes(ext) || !["image/jpeg", "image/png"].includes(f.mimetype)) {
+    return res.status(400).json({ ok: false, error: "❌ Use JPEG ou PNG" });
+  }
+  if (f.size > IMG_MAX) {
+    return res.status(400).json({ ok: false, error: `❌ Imagem maior que 5 MB (tem ${(f.size / 1048576).toFixed(1)} MB). Reduza.` });
+  }
+  // b) validação REAL com a Meta, pela conta ativa
+  const active = await resolveActiveId(user, await ensureAccountsForUser(user));
+  const account = active ? await getAccountForUser(Number(active), user) : null;
+  if (!account || !account.token || !account.phone_number_id) {
+    return res.status(400).json({ ok: false, error: "❌ Configure a conta ativa (token + Phone Number ID) na aba Config pra validar a imagem com a Meta" });
+  }
+  if (!isDryRun()) {
+    const up = await uploadMedia({ accessToken: account.token, phoneNumberId: account.phone_number_id, fileBuffer: f.buffer, mimeType: mime });
+    if (!up.ok) return res.status(400).json({ ok: false, error: "❌ " + up.message });
+  }
+  // c) guarda o arquivo (não o media_id)
+  clearImagem(user);
+  const path = imgPath(user, mime);
+  writeFileSync(path, f.buffer);
+  IMAGENS.set(user, { path, mime, name: f.originalname, size: f.size });
+  res.json({ ok: true, message: "✅ Imagem OK pra disparo (validada pela Meta)", name: f.originalname, size: f.size, mime });
+}));
+
+app.get("/api/disparo/imagem", (req, res) => {
+  const im = IMAGENS.get(req.session.user);
+  res.json(im ? { loaded: true, name: im.name, size: im.size, mime: im.mime } : { loaded: false });
+});
+app.get("/api/disparo/imagem/preview", (req, res) => {
+  const im = IMAGENS.get(req.session.user);
+  if (!im || !existsSync(im.path)) return res.status(404).end();
+  res.setHeader("Content-Type", im.mime);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(readFileSync(im.path));
+});
+app.delete("/api/disparo/imagem", (req, res) => {
+  clearImagem(req.session.user);
+  res.json({ ok: true });
+});
+
 const RECENT_STARTS = new Map(); // chave do start → { ts, promise }
 
 app.post("/api/disparo/start", wrap(async (req, res) => {
@@ -551,6 +626,22 @@ app.post("/api/disparo/start", wrap(async (req, res) => {
   }
   try {
     const startP = (async () => {
+    // Prompt 39: se há imagem, UM upload pela conta que vai disparar; falhou → aborta o run.
+    let headerImageId = null;
+    const im = IMAGENS.get(user);
+    if (im) {
+      if (isDryRun()) headerImageId = "DRYRUN-IMG";
+      else {
+        const up = await uploadMedia({
+          accessToken: account.token,
+          phoneNumberId: account.phone_number_id,
+          fileBuffer: readFileSync(im.path),
+          mimeType: im.mime,
+        });
+        if (!up.ok) throw new Error(`Não consegui subir a imagem pra conta ${account.apelido}: ${up.message}`);
+        headerImageId = up.mediaId;
+      }
+    }
     const { runId, snapshot } = await startDisparo(leads, {
       userId: user,
       account: {
@@ -567,6 +658,7 @@ app.post("/api/disparo/start", wrap(async (req, res) => {
       language,
       concurrency: Number(cfg.concurrency) || 10,
       skipDuplicates: skip,
+      headerImageId,
       pauseAt: pauseAtVal,
       csvFilename: buf.filename,
       csvHeaders: buf.headers,
