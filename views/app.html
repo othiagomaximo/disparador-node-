@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=35" />
+  <link rel="stylesheet" href="/style.css?v=36" />
 </head>
 <body>
   <div class="app">
@@ -46,7 +46,7 @@
           <h3>📇 Minhas contas</h3>
           <button id="add-account" class="primary small">➕ Adicionar conta</button>
         </div>
-        <p class="hint">Cada conta tem um <b>apelido</b> e suas credenciais da Cloud API. Use <b>Usar</b> pra trocar a conta ativa, 🗑 pra apagar.</p>
+        <p class="hint">Cada conta tem um <b>apelido</b> e suas credenciais da Cloud API. Use <b>Usar</b> pra trocar a conta ativa, <b>Excluir conta</b> pra apagar.</p>
         <div id="accounts-list"></div>
       </div>
 
@@ -92,7 +92,11 @@
         <h3>Variáveis do template</h3>
         <p class="muted">Cada linha vira <code>{{1}}</code>, <code>{{2}}</code>, ... na ordem.</p>
         <div id="var-cols"></div>
-        <button id="add-var" class="ghost">+ Adicionar variável</button>
+        <div class="row btn-row">
+          <button id="add-var" class="ghost">➕ Adicionar variável</button>
+          <button id="confirm-map" class="primary">✅ Confirmar mapeamento</button>
+          <span id="confirm-map-msg" class="confirm-msg"></span>
+        </div>
         <h3>Pré-visualização dos dados</h3>
         <p class="muted">Confira se o CSV foi lido certo. A coluna do telefone já aparece com o <code>+55</code> aplicado.</p>
         <div class="table-wrap"><table id="preview-table"></table></div>
@@ -184,6 +188,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=35"></script>
+  <script src="/app.js?v=36"></script>
 </body>
 </html>
