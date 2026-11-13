@@ -126,7 +126,7 @@ function accountCardHtml(a) {
   return `
   <div class="account-card${a.ativa ? " active" : ""}" data-id="${id}">
     <div class="account-head">
-      <span class="account-swatch" style="background:${escapeAttr(cor)}"></span>
+      <span class="acc-dot${a.ativa ? " on" : ""}" title="${a.ativa ? "Conta ativa" : "Conta inativa"}"></span>
       <b>${a.id ? escapeHtml((a.icone || "") + " " + a.apelido) : "Nova conta"}</b>
       ${a.ativa ? '<span class="badge-ativa">ativa</span>' : ""}
       <span class="head-actions">

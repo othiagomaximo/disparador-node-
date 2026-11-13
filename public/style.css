@@ -439,3 +439,7 @@ button.eye-btn:hover { filter: none; color: var(--text); border-color: var(--acc
 .img-preview { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
 .img-preview.hidden { display: none; }
 .img-preview img { max-width: 120px; max-height: 120px; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); }
+
+/* Prompt 40: indicador de conta ativa (verde só na ativa) */
+.acc-dot { width: 12px; height: 12px; border-radius: 50%; background: #4b5563; flex: none; display: inline-block; }
+.acc-dot.on { background: var(--accent); box-shadow: 0 0 0 3px rgba(34,197,94,.2); }
