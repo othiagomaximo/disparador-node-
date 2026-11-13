@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Disparador · WhatsApp Cloud API</title>
-  <link rel="stylesheet" href="/style.css?v=36" />
+  <link rel="stylesheet" href="/style.css?v=39" />
 </head>
 <body>
   <div class="app">
@@ -106,6 +106,17 @@
         </div>
       </div>
       </div>
+
+      <div class="card" id="img-card">
+        <h3>🖼️ Imagem do template (opcional)</h3>
+        <p class="hint">Só se o seu template tem <b>header de imagem</b>. A mesma imagem vai pra todos os leads. Aceita <b>JPEG ou PNG</b>, até <b>5 MB</b>. Sem imagem, o disparo segue normal (só texto).</p>
+        <input type="file" id="img-file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" />
+        <div id="img-status" class="img-status"></div>
+        <div id="img-preview" class="img-preview hidden">
+          <img id="img-thumb" alt="Prévia da imagem" />
+          <button id="img-remove" class="link-discreto" type="button">x Remover imagem</button>
+        </div>
+      </div>
     </section>
 
     <!-- TAB 3 - DISPARO -->
@@ -188,6 +199,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=38"></script>
+  <script src="/app.js?v=39"></script>
 </body>
 </html>

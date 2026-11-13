@@ -1103,3 +1103,41 @@ fetch("/api/me").then((r) => r.json()).then((j) => {
   document.getElementById("user-name").textContent = j.user || "—";
   document.getElementById("user-av").textContent = (j.user || "?")[0].toUpperCase();
 }).catch(() => {});
+
+// ===== Prompt 39: imagem do template =====
+(function () {
+  const fileEl = document.getElementById("img-file");
+  const st = document.getElementById("img-status");
+  const pv = document.getElementById("img-preview");
+  const th = document.getElementById("img-thumb");
+  const rm = document.getElementById("img-remove");
+  if (!fileEl) return;
+  function showOk(msg) {
+    st.className = "img-status ok"; st.textContent = msg;
+    th.src = "/api/disparo/imagem/preview?t=" + Date.now();
+    pv.classList.remove("hidden");
+  }
+  function showErr(msg) {
+    st.className = "img-status err"; st.textContent = msg;
+    pv.classList.add("hidden");
+  }
+  fileEl.addEventListener("change", async () => {
+    const f = fileEl.files[0];
+    if (!f) return;
+    st.className = "img-status"; st.textContent = "Validando imagem...";
+    const fd = new FormData();
+    fd.append("image", f);
+    try {
+      const r = await fetch("/api/disparo/imagem", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) showOk(j.message);
+      else showErr(j.error || "❌ Erro ao validar a imagem");
+    } catch (e) { showErr("❌ Falha de rede: " + e.message); }
+    fileEl.value = "";
+  });
+  rm.addEventListener("click", async () => {
+    await fetch("/api/disparo/imagem", { method: "DELETE" });
+    pv.classList.add("hidden"); st.textContent = ""; st.className = "img-status";
+  });
+  fetch("/api/disparo/imagem").then((r) => r.json()).then((j) => { if (j.loaded) showOk("✅ Imagem pronta pra disparo: " + j.name); }).catch(() => {});
+})();

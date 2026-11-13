@@ -431,3 +431,11 @@ button.eye-btn:hover { filter: none; color: var(--text); border-color: var(--acc
 
 .confirm-msg { color: var(--accent); font-size: 13px; font-weight: 600; opacity: 0; transition: opacity .25s; }
 .confirm-msg.show { opacity: 1; }
+
+/* Prompt 39: imagem do template */
+.img-status { margin-top: 10px; font-size: 14px; font-weight: 600; }
+.img-status.ok { color: var(--accent); }
+.img-status.err { color: #f87171; }
+.img-preview { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+.img-preview.hidden { display: none; }
+.img-preview img { max-width: 120px; max-height: 120px; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); }
